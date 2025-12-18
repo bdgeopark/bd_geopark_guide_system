@@ -25,7 +25,7 @@ def get_client():
     except:
         try:
             # 2순위: 스트림릿 클라우드 (Secrets에서 가져오기)
-            # ★ 박사님이 방금 수정한 [gcp_service_account] 섹션을 여기서 불러옵니다!
+            # Secrets의 [gcp_service_account] 섹션을 불러옵니다.
             key_dict = st.secrets["gcp_service_account"]
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
         except Exception as e:
@@ -138,4 +138,70 @@ else:
         
         c3, c4 = st.columns(2)
         with c3:
-            w_hours = st.number_input("활동 시간", min_value=0,
+            w_hours = st.number_input("활동 시간", min_value=0, value=8)
+        with c4:
+            visitors = st.number_input("방문객(명)", min_value=0)
+            
+        listeners = st.number_input("해설 청취자(명)", min_value=0)
+        counts = st.number_input("해설 횟수(회)", min_value=0)
+
+        if st.button("저장하기", type="primary"):
+            row = [str(input_date), sel_island, sel_place, my_name, w_hours, visitors, listeners, counts, str(datetime.now()), "검토대기"]
+            if save_log(row):
+                st.success("✅ 저장되었습니다!")
+            else:
+                st.error("저장 실패")
+
+    # 탭 2: 내 활동 조회
+    with tabs[1]:
+        st.subheader("내 과거 기록 확인")
+        if st.button("내역 불러오기"):
+            try:
+                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                df = pd.DataFrame(sheet.get_all_records())
+                my_df = df[df['이름'] == my_name]
+                if not my_df.empty:
+                    st.dataframe(my_df)
+                else:
+                    st.info("기록이 없습니다.")
+            except:
+                st.error("데이터 로드 실패")
+
+    # 탭 3: 계획
+    with tabs[2]:
+        st.subheader("🗓️ 다음 달 근무 계획")
+        p_date = st.date_input("계획 날짜", datetime.now() + timedelta(days=30))
+        p_place = st.selectbox("예정 장소", locations.get(my_island, ["-"]))
+        p_note = st.text_input("비고")
+        if st.button("계획 제출"):
+            if save_plan([str(p_date), my_island, p_place, my_name, p_note]):
+                st.success("제출 완료!")
+            else:
+                st.error("실패")
+
+    # 탭 4: 검토 (조장/관리자)
+    if my_role in ["조장", "관리자"]:
+        with tabs[3]:
+            st.subheader("조원 활동 모니터링")
+            if st.button("조회하기"):
+                try:
+                    sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                    df = pd.DataFrame(sheet.get_all_records())
+                    if my_role != "관리자":
+                        df = df[df['섬'] == my_island]
+                    st.dataframe(df)
+                except:
+                    st.error("실패")
+
+    # 탭 5: 통계 (관리자)
+    if my_role == "관리자":
+        with tabs[4]:
+            st.subheader("운영 통계")
+            try:
+                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                df = pd.DataFrame(sheet.get_all_records())
+                if not df.empty:
+                    st.metric("총 방문객", f"{df['방문자'].sum():,}명")
+                    st.bar_chart(df.groupby("섬")['방문자'].sum())
+            except:
+                st.write("데이터 없음")
