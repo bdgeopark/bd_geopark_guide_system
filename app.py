@@ -7,7 +7,7 @@ import time
 import calendar
 
 # ---------------------------------------------------------
-# 1. 시스템 설정 (에러 확인 강화 버전)
+# 1. 시스템 설정
 # ---------------------------------------------------------
 st.set_page_config(page_title="지질공원 통합관리", page_icon="🪨", layout="wide")
 
@@ -42,7 +42,7 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 핵심 함수 (여기를 고쳤습니다!)
+# 2. 핵심 함수
 # ---------------------------------------------------------
 def login(username, password):
     try:
@@ -70,33 +70,31 @@ def save_log(data):
         sheet.append_row(data)
         return True
     except Exception as e:
-        st.error(f"저장 실패 원인: {e}") # 에러 메시지 출력
+        st.error(f"저장 실패: {e}")
         return False
 
 def save_plan_bulk(rows):
     try:
-        # ★ 수정됨: 월간계획 시트가 없으면 에러를 띄움
         sheet = client.open(SPREADSHEET_NAME).worksheet("월간계획")
-        
-        # ★ 수정됨: 한 줄씩 넣지 않고 '한 방에' 넣기 (속도 10배 향상)
-        sheet.append_rows(rows) 
+        sheet.append_rows(rows)
         return True
     except gspread.exceptions.WorksheetNotFound:
-        st.error("🚨 오류: 구글 시트에 '월간계획'이라는 탭이 없습니다! 시트를 먼저 만들어주세요.")
+        st.error("🚨 '월간계획' 시트가 없습니다.")
         return False
     except Exception as e:
-        st.error(f"🚨 저장 중 알 수 없는 오류 발생: {e}")
+        st.error(f"저장 실패: {e}")
         return False
 
 def update_status_to_approve(target_indices):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+        # 데이터프레임 인덱스는 0부터, 시트는 2행부터 시작 (헤더 포함)
         for idx in target_indices:
             row_num = idx + 2 
             sheet.update_cell(row_num, 10, "승인완료") 
         return True
     except Exception as e:
-        st.error(f"업데이트 실패: {e}")
+        st.error(f"승인 실패: {e}")
         return False
 
 # ---------------------------------------------------------
@@ -127,13 +125,15 @@ else:
 
     tabs_list = ["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획"]
     if my_role in ["조장", "관리자"]:
-        tabs_list.append("👀 조원 활동 검토")
+        tabs_list.append("👀 조원 활동/계획 검토")
     if my_role == "관리자":
         tabs_list.append("📊 관리자 통계")
 
     tabs = st.tabs(tabs_list)
 
+    # -----------------------------------------------------
     # 탭 1: 활동 입력
+    # -----------------------------------------------------
     with tabs[0]:
         st.subheader("오늘 활동 기록")
         c1, c2 = st.columns(2)
@@ -161,10 +161,10 @@ else:
             row = [str(input_date), sel_island, sel_place, my_name, w_hours, visitors, listeners, counts, str(datetime.now()), "검토대기"]
             if save_log(row):
                 st.success("✅ 저장되었습니다!")
-            else:
-                pass # 에러 메시지는 함수 안에서 출력됨
 
+    # -----------------------------------------------------
     # 탭 2: 내 활동 조회
+    # -----------------------------------------------------
     with tabs[1]:
         st.subheader("내 과거 기록 확인")
         if st.button("내역 불러오기"):
@@ -179,7 +179,9 @@ else:
             except:
                 st.error("데이터 로드 실패")
 
-    # 탭 3: 계획 (핸드폰 최적화 + 디버깅 강화)
+    # -----------------------------------------------------
+    # 탭 3: 계획 (핸드폰 최적화)
+    # -----------------------------------------------------
     with tabs[2]:
         st.subheader("🗓️ 근무 계획 일괄 등록")
         
@@ -202,7 +204,6 @@ else:
         day_options = []
         for d in day_range:
             dt = datetime(plan_year, plan_month, d)
-            # 포맷 통일: 05일 (Mon) 형식
             day_str = dt.strftime("%d일 (%a)")
             day_options.append(day_str)
 
@@ -211,69 +212,100 @@ else:
 
         if st.button(f"{len(selected_days_str)}일치 계획 제출"):
             if not selected_days_str:
-                st.warning("⚠️ 날짜를 하나 이상 선택해주세요.")
+                st.warning("⚠️ 날짜를 선택해주세요.")
             else:
-                with st.spinner("저장 중입니다... 잠시만 기다려주세요."):
+                with st.spinner("저장 중..."):
                     rows_to_add = []
                     for s in selected_days_str:
-                        # "05일 (Mon)"에서 숫자만 추출
-                        try:
-                            day_num = int(s.split("일")[0])
-                            real_date = datetime(plan_year, plan_month, day_num).strftime("%Y-%m-%d")
-                            rows_to_add.append([real_date, my_island, plan_place, my_name, plan_note, str(datetime.now())])
-                        except Exception as e:
-                            st.error(f"날짜 변환 오류: {s} / 원인: {e}")
+                        day_num = int(s.split("일")[0])
+                        real_date = datetime(plan_year, plan_month, day_num).strftime("%Y-%m-%d")
+                        rows_to_add.append([real_date, my_island, plan_place, my_name, plan_note, str(datetime.now())])
                     
-                    # 일괄 저장 시도
                     if save_plan_bulk(rows_to_add):
-                        st.success(f"✅ {len(rows_to_add)}건의 계획이 성공적으로 등록되었습니다!")
-                        time.sleep(2)
+                        st.success(f"✅ {len(rows_to_add)}건 등록 완료!")
+                        time.sleep(1)
                         st.rerun()
 
-    # 탭 4: 검토
+    # -----------------------------------------------------
+    # 탭 4: 검토 (★ 수정된 부분: 활동 vs 계획 선택 가능)
+    # -----------------------------------------------------
     if my_role in ["조장", "관리자"]:
         with tabs[3]:
-            st.subheader("👀 조원 활동 승인")
-            try:
-                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
-                all_data = sheet.get_all_records()
-                df = pd.DataFrame(all_data)
-                
-                if my_role != "관리자":
-                    df = df[df['섬'] == my_island]
-                
-                view_option = st.radio("보기 방식", ["전체 보기", "검토 대기 건만 보기"], horizontal=True)
-                
-                if view_option == "검토 대기 건만 보기":
-                    display_df = df[df['상태'] == "검토대기"]
-                else:
-                    display_df = df
-                
-                st.dataframe(display_df)
+            st.subheader("👀 조원 활동/계획 검토")
+            
+            # 여기서 무엇을 볼지 선택합니다
+            check_type = st.radio("확인할 항목을 선택하세요:", ["✅ 활동 내역 (승인)", "📅 월간 계획 (조회)"], horizontal=True)
+            
+            st.divider()
 
-                st.divider()
-                st.write("### 📢 승인 처리")
-                pending_df = df[df['상태'] == "검토대기"]
-                
-                if pending_df.empty:
-                    st.info("승인 대기 중인 활동이 없습니다.")
-                else:
-                    pending_indices = pending_df.index.tolist()
-                    selected_indices = st.multiselect(
-                        "승인할 목록 선택:",
-                        options=pending_indices,
-                        format_func=lambda x: f"{df.loc[x]['날짜']} - {df.loc[x]['이름']} ({df.loc[x]['장소']})"
-                    )
+            if "활동 내역" in check_type:
+                # 1. 활동 내역 보기 (기존 기능)
+                try:
+                    sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                    df = pd.DataFrame(sheet.get_all_records())
                     
-                    if st.button("선택한 항목 승인하기"):
-                        if update_status_to_approve(selected_indices):
-                            st.success("승인 완료!")
-                            time.sleep(1)
-                            st.rerun()
-            except Exception as e:
-                st.error(f"데이터 로드 실패: {e}")
+                    if my_role != "관리자":
+                        df = df[df['섬'] == my_island]
+                    
+                    # 필터 옵션
+                    view_option = st.checkbox("검토 대기 건만 보기", value=True)
+                    if view_option:
+                        display_df = df[df['상태'] == "검토대기"]
+                    else:
+                        display_df = df
+                    
+                    st.dataframe(display_df)
+                    
+                    # 승인 기능
+                    pending_df = df[df['상태'] == "검토대기"]
+                    if not pending_df.empty:
+                        st.write("#### 📢 승인 처리")
+                        pending_indices = pending_df.index.tolist()
+                        selected_indices = st.multiselect(
+                            "승인할 목록 선택:",
+                            options=pending_indices,
+                            format_func=lambda x: f"{df.loc[x]['날짜']} - {df.loc[x]['이름']} ({df.loc[x]['장소']})"
+                        )
+                        if st.button("선택 항목 승인하기"):
+                            if update_status_to_approve(selected_indices):
+                                st.success("승인 완료!")
+                                time.sleep(1)
+                                st.rerun()
+                    else:
+                        if view_option:
+                            st.info("현재 대기 중인 활동이 없습니다.")
 
+                except Exception as e:
+                    st.error(f"일지 로드 실패: {e}")
+
+            else:
+                # 2. 월간 계획 보기 (새로 추가된 기능!)
+                try:
+                    sheet = client.open(SPREADSHEET_NAME).worksheet("월간계획")
+                    df = pd.DataFrame(sheet.get_all_records())
+                    
+                    # 계획 데이터가 비어있을 경우 예외처리
+                    if df.empty:
+                        st.info("등록된 계획이 아직 없습니다.")
+                    else:
+                        if my_role != "관리자":
+                            df = df[df['섬'] == my_island]
+                        
+                        # 보기 좋게 날짜순 정렬
+                        if '날짜' in df.columns:
+                            df = df.sort_values(by='날짜')
+                        
+                        st.write(f"📊 **{my_island if my_role != '관리자' else '전체'}** 근무 계획 현황")
+                        st.dataframe(df)
+                        
+                except gspread.exceptions.WorksheetNotFound:
+                    st.error("🚨 '월간계획' 시트가 없습니다. 시트를 생성해주세요.")
+                except Exception as e:
+                    st.error(f"계획 로드 실패: {e}")
+
+    # -----------------------------------------------------
     # 탭 5: 통계
+    # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
             st.subheader("운영 통계")
