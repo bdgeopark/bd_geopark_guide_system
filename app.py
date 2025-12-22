@@ -11,10 +11,11 @@ import calendar
 # ---------------------------------------------------------
 st.set_page_config(page_title="지질공원 통합관리", page_icon="🪨", layout="wide")
 
-# ★ 화면 기억장치 초기화 (이게 있어야 안 사라집니다!)
+# 세션 초기화
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-if 'generated_df' not in st.session_state: st.session_state['generated_df'] = None # 만들어진 표 저장
+if 'generated_df' not in st.session_state: st.session_state['generated_df'] = None 
+if 'active_guides' not in st.session_state: st.session_state['active_guides'] = [] 
 
 @st.cache_resource
 def get_client():
@@ -41,25 +42,33 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 기능 함수
+# 2. 기능 함수 (★ 로그인 함수 수정됨)
 # ---------------------------------------------------------
 def login(username, password):
+    # 1. DB 연결 시도
+    if client is None:
+        st.error("서버 연결 실패 (인증키 확인 필요)")
+        return
+
     try:
-        if client is None:
-            st.error("서버 연결 실패")
-            return
         sheet = client.open(SPREADSHEET_NAME).worksheet("사용자")
         users = sheet.get_all_records()
-        for user in users:
-            if str(user['아이디']) == str(username) and str(user['비번']) == str(password):
-                st.session_state['logged_in'] = True
-                st.session_state['user_info'] = user
-                st.success(f"환영합니다, {user['이름']}님!")
-                time.sleep(0.5)
-                st.rerun()
-                return
-        st.error("아이디 확인 요망")
-    except: st.error("로그인 오류")
+    except Exception as e:
+        st.error(f"사용자 DB를 불러올 수 없습니다: {e}")
+        return
+
+    # 2. 아이디/비번 확인
+    for user in users:
+        if str(user['아이디']) == str(username) and str(user['비번']) == str(password):
+            st.session_state['logged_in'] = True
+            st.session_state['user_info'] = user
+            st.success(f"환영합니다, {user['이름']}님!")
+            time.sleep(0.5)
+            st.rerun() # 여기서 에러처리에 잡히지 않도록 구조 변경함
+            return
+
+    # 3. 반복문이 끝날 때까지 못 찾으면 실패
+    st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
 
 def get_users_by_island(island_name):
     try:
@@ -90,7 +99,9 @@ if not st.session_state['logged_in']:
     with st.form("login"):
         uid = st.text_input("아이디")
         upw = st.text_input("비밀번호", type="password")
-        if st.form_submit_button("로그인"): login(uid, upw)
+        # 엔터키나 버튼 누르면 로그인 실행
+        if st.form_submit_button("로그인"): 
+            login(uid, upw)
 else:
     user = st.session_state['user_info']
     my_name = user['이름']
@@ -99,14 +110,16 @@ else:
 
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
-        # ★ 초기화 버튼 (입력하다 꼬이면 이거 누르라고 하세요)
+        # ★ 초기화 버튼
         if st.button("🔄 입력화면 초기화"):
             st.session_state['generated_df'] = None
+            st.session_state['active_guides'] = []
             st.rerun()
         st.divider()
         if st.button("로그아웃"):
             st.session_state['logged_in'] = False
             st.session_state['generated_df'] = None
+            st.session_state['active_guides'] = []
             st.rerun()
 
     st.title(f"📱 {my_name}님의 업무공간")
@@ -114,12 +127,11 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (사라짐 방지 기능 적용)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]:
         st.subheader("활동 실적 등록")
         
-        # 1. 설정값 입력
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1: t_year = st.number_input("년", value=datetime.now().year)
         with c2: t_month = st.number_input("월", value=datetime.now().month)
@@ -136,67 +148,84 @@ else:
 
         st.divider()
 
-        # 2. 해설사 선택 및 날짜 체크
+        # 2. 해설사 추가하기
+        st.markdown("##### ➕ 이번 기간에 활동한 해설사 추가")
         island_users = get_users_by_island(sel_island)
-        if not island_users: island_users = ["해설사 없음"]
+        
+        col_add1, col_add2, col_btn = st.columns([2, 1, 1])
+        with col_add1:
+            if island_users:
+                selected_user_db = st.selectbox("명단에서 선택", ["선택안함"] + island_users)
+            else:
+                selected_user_db = "선택안함"
+                st.caption("⚠️ 명단 없음")
+        
+        with col_add2:
+            manual_name = st.text_input("직접 입력 (명단에 없을 때)")
+        
+        with col_btn:
+            st.write("") 
+            if st.button("추가하기", type="primary"):
+                name_to_add = ""
+                if manual_name.strip(): name_to_add = manual_name.strip()
+                elif selected_user_db != "선택안함": name_to_add = selected_user_db
+                
+                if name_to_add:
+                    if name_to_add not in st.session_state['active_guides']:
+                        st.session_state['active_guides'].append(name_to_add)
+                        st.rerun()
+                    else: st.warning("이미 추가됨")
+                else: st.warning("이름 확인 필요")
 
-        if my_role == "관리자":
-            # 여기가 사라지지 않게 하려면 multiselect가 session_state와 연결될 필요는 없지만
-            # 리런되어도 값이 유지되도록 스트림릿이 알아서 처리합니다.
-            # 다만, 섬을 바꾸면 초기화됩니다.
-            selected_guides = st.multiselect("📝 이번 기간에 활동한 해설사를 모두 선택하세요", island_users)
-        else:
-            selected_guides = [my_name]
-            st.info(f"👤 **{my_name}**님의 근무일을 체크하세요.")
-
-        # 날짜 범위 계산
+        # 3. 날짜 체크
         _, last_day = calendar.monthrange(t_year, t_month)
         day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
-
-        # 체크박스 데이터 수집용 리스트
         schedule_data = [] 
-        
-        # ★ 해설사별 체크박스 화면 (여기가 중요!)
-        if selected_guides:
-            for guide in selected_guides:
+
+        if st.session_state['active_guides']:
+            st.write(f"📋 **총 {len(st.session_state['active_guides'])}명** 선택됨")
+            
+            for guide in st.session_state['active_guides']:
                 with st.expander(f"🗓️ **{guide}**님 근무일 체크", expanded=True):
-                    cols = st.columns(5)
+                    if st.button(f"🗑️ {guide} 제외", key=f"del_{guide}"):
+                        st.session_state['active_guides'].remove(guide)
+                        st.rerun()
+
+                    cols = st.columns(7)
                     for i, day in enumerate(day_range):
-                        # 키 값을 유니크하게 해서 상태 유지
-                        key = f"chk_{guide}_{day}_{t_month}" 
-                        with cols[i % 5]:
-                            if st.checkbox(f"{day}일", key=key):
-                                dt_obj = datetime(t_year, t_month, day)
+                        key = f"chk_{guide}_{day}_{t_month}"
+                        dt_obj = datetime(t_year, t_month, day)
+                        weekday = dt_obj.strftime("%a")
+                        label = f"{day}({weekday})"
+                        if weekday in ['Sat', 'Sun']: label = f"**{label}**"
+                        
+                        with cols[i % 7]:
+                            if st.checkbox(label, key=key):
                                 full_date = dt_obj.strftime("%Y-%m-%d")
-                                weekday = dt_obj.strftime("%a")
                                 schedule_data.append([full_date, guide, weekday])
-
-        # 3. 표 만들기 버튼
-        # (버튼을 누르면 session_state에 데이터를 저장하고 화면을 다시 그립니다)
-        if st.button("⬇️ 위에서 체크한 내용으로 표 생성"):
-            if not schedule_data:
-                st.warning("⚠️ 근무일을 하나 이상 체크해주세요.")
-            else:
-                # 데이터프레임 생성
-                rows = []
-                for item in schedule_data:
-                    # item = [날짜, 이름, 요일]
-                    # 기본값: 8시간, 나머지 0
-                    rows.append([item[0], item[2], item[1], "8시간", 0, 0, 0, 0])
-                
-                # 날짜순, 이름순 정렬
-                df = pd.DataFrame(rows, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)", "방문자", "청취자", "해설횟수"])
-                df = df.sort_values(by=["일자", "해설사"])
-                
-                # ★★★ 여기가 핵심: 세션에 저장해둠! ★★★
-                st.session_state['generated_df'] = df 
-                st.rerun() # 화면 갱신 (이제 사라지지 않음)
-
-        # 4. 생성된 표 보여주기 (세션에 데이터가 있을 때만)
-        if st.session_state['generated_df'] is not None:
+            
             st.divider()
-            st.success("✅ 표가 생성되었습니다. 내용을 입력하고 저장하세요.")
-            st.caption("※ 다시 선택하려면 왼쪽 메뉴의 [🔄 입력화면 초기화] 버튼을 누르세요.")
+            
+            # 4. 표 생성
+            if st.button("⬇️ 위에서 체크한 내용으로 표 생성"):
+                if not schedule_data:
+                    st.warning("근무일을 하나 이상 체크해주세요.")
+                else:
+                    rows = []
+                    for item in schedule_data:
+                        rows.append([item[0], item[2], item[1], "8시간", 0, 0, 0, 0])
+                    
+                    df = pd.DataFrame(rows, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)", "방문자", "청취자", "해설횟수"])
+                    df = df.sort_values(by=["일자", "해설사"])
+                    st.session_state['generated_df'] = df
+                    st.rerun()
+        
+        else:
+            st.info("👆 위에서 **[추가하기]** 버튼으로 해설사를 추가해주세요.")
+
+        # 5. 입력 및 저장
+        if st.session_state['generated_df'] is not None:
+            st.subheader("📝 상세 내용 입력")
             
             edited_df = st.data_editor(
                 st.session_state['generated_df'],
@@ -215,8 +244,7 @@ else:
                 num_rows="dynamic"
             )
 
-            # 저장 버튼
-            if st.button("✅ 작성 완료! 일괄 저장하기"):
+            if st.button("✅ 입력 완료! 구글 시트에 저장"):
                 rows_to_save = []
                 for _, row in edited_df.iterrows():
                     fh = 8
@@ -232,8 +260,9 @@ else:
                     ])
                 
                 if save_bulk("운영일지", rows_to_save):
-                    st.success(f"총 {len(rows_to_save)}건이 저장되었습니다!")
-                    st.session_state['generated_df'] = None # 저장 후 표 비우기
+                    st.success(f"총 {len(rows_to_save)}건 저장 성공!")
+                    st.session_state['generated_df'] = None
+                    st.session_state['active_guides'] = [] 
                     time.sleep(1)
                     st.rerun()
 
