@@ -315,4 +315,5 @@ else:
             check_type = st.radio("확인할 항목:", ["✅ 활동 내역 (승인)", "📅 월간 계획 (조회)"], horizontal=True)
             st.divider()
 
-            if "활동 내역" in check_type
+            if "활동 내역" in check_type:
+
