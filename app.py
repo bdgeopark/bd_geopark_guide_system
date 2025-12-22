@@ -148,7 +148,7 @@ else:
     tabs = st.tabs(tabs_list)
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (★ 표 형태로 개선됨)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]:
         st.subheader("활동 실적 등록")
@@ -194,4 +194,127 @@ else:
             counts = st.number_input("해설 횟수(회)", min_value=0)
 
             if st.button(f"'{target_name}'님 명의로 저장하기", type="primary"):
-                row = [str(input_date), sel_island, sel_place, target_name, w_hours, visitors, listeners, counts, str
+                # ★ 여기가 수정되었습니다 (줄바꿈으로 안전하게!)
+                row = [
+                    str(input_date), sel_island, sel_place, target_name, 
+                    w_hours, visitors, listeners, counts, 
+                    str(datetime.now()), "검토대기"
+                ]
+                if save_log(row):
+                    st.success(f"✅ {target_name}님의 기록이 저장되었습니다!")
+
+        else:
+            # --- 표 형태 일괄 입력 ---
+            st.info(f"💡 **'{target_name}'** 님의 근무표를 작성합니다. 근무한 날의 **체크박스**를 선택하세요.")
+            
+            col_y, col_m = st.columns(2)
+            with col_y:
+                target_year = st.number_input("년도", value=datetime.now().year)
+            with col_m:
+                target_month = st.number_input("월", value=datetime.now().month, min_value=1, max_value=12)
+
+            period_type = st.radio("기간 선택", ["전반기 (1일 ~ 15일)", "후반기 (16일 ~ 말일)"], horizontal=True, key="act_period")
+            
+            # 장소 및 공통 정보
+            st.markdown("##### 📌 장소 및 방문객 (일괄 적용)")
+            c1, c2 = st.columns(2)
+            with c1:
+                if my_role == "관리자":
+                    sel_island = st.selectbox("섬", list(locations.keys()), key="act_island")
+                else:
+                    sel_island = my_island
+                    st.success(f"📍 {sel_island}")
+                sel_place = st.selectbox("장소", locations.get(sel_island, ["장소없음"]), key="act_place")
+            with c2:
+                visitors = st.number_input("방문객(명)", min_value=0, key="act_visit")
+                counts = st.number_input("해설 횟수(회)", min_value=0, key="act_count")
+                listeners = st.number_input("해설 청취자(명)", min_value=0, key="act_listen")
+
+            # 날짜 데이터 생성
+            _, last_day = calendar.monthrange(target_year, target_month)
+            if "전반기" in period_type:
+                day_range = range(1, 16)
+            else:
+                day_range = range(16, last_day + 1)
+            
+            # 데이터프레임 만들기
+            data_list = []
+            for d in day_range:
+                dt = datetime(target_year, target_month, d)
+                day_str = dt.strftime("%Y-%m-%d")
+                weekday = dt.strftime("%a")
+                # [선택, 날짜, 요일, 시간옵션, 직접입력시간]
+                data_list.append([False, day_str, weekday, "8시간", 0])
+            
+            df_input = pd.DataFrame(data_list, columns=["근무여부", "날짜", "요일", "근무시간", "직접입력(시간)"])
+
+            # 에디터 설정
+            edited_df = st.data_editor(
+                df_input,
+                column_config={
+                    "근무여부": st.column_config.CheckboxColumn(
+                        "체크 (근무일)",
+                        help="근무한 날짜에 체크하세요",
+                        default=False,
+                    ),
+                    "날짜": st.column_config.TextColumn("날짜", disabled=True),
+                    "요일": st.column_config.TextColumn("요일", disabled=True),
+                    "근무시간": st.column_config.SelectboxColumn(
+                        "시간 선택",
+                        options=["8시간", "4시간", "직접입력"],
+                        required=True,
+                        default="8시간"
+                    ),
+                    "직접입력(시간)": st.column_config.NumberColumn(
+                        "직접입력(숫자만)",
+                        min_value=0,
+                        max_value=24,
+                        format="%d시간"
+                    )
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+
+            if st.button(f"선택한 날짜 일괄 등록"):
+                selected_rows = edited_df[edited_df["근무여부"] == True]
+                
+                if selected_rows.empty:
+                    st.warning("⚠️ 근무한 날짜를 하나 이상 체크해주세요.")
+                else:
+                    rows_to_add = []
+                    for index, row in selected_rows.iterrows():
+                        final_hours = 8
+                        if row["근무시간"] == "8시간":
+                            final_hours = 8
+                        elif row["근무시간"] == "4시간":
+                            final_hours = 4
+                        elif row["근무시간"] == "직접입력":
+                            final_hours = row["직접입력(시간)"]
+                            if final_hours == 0:
+                                st.warning(f"⚠️ {row['날짜']}: '직접입력'을 선택했는데 시간이 0입니다. 확인해주세요.")
+                                continue
+
+                        rows_to_add.append([
+                            row["날짜"], sel_island, sel_place, target_name, 
+                            final_hours, visitors, listeners, counts, 
+                            str(datetime.now()), "검토대기"
+                        ])
+                    
+                    if rows_to_add:
+                        if save_log_bulk(rows_to_add):
+                            st.success(f"✅ 총 {len(rows_to_add)}건의 활동 기록이 등록되었습니다!")
+                            time.sleep(1)
+                            st.rerun()
+
+    # 탭 2: 내 활동 조회
+    with tabs[1]:
+        st.subheader("내 과거 기록 확인")
+        if st.button("내역 불러오기"):
+            try:
+                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                df = pd.DataFrame(sheet.get_all_records())
+                my_df = df[df['이름'] == my_name]
+                if not my_df.empty:
+                    if '날짜' in my_df.columns:
+                        my_df['날짜'] = pd.
