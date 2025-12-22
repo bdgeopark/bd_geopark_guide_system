@@ -7,7 +7,7 @@ import time
 import calendar
 
 # ---------------------------------------------------------
-# 1. 시스템 설정 (속도 최적화 적용)
+# 1. 시스템 설정
 # ---------------------------------------------------------
 st.set_page_config(page_title="지질공원 통합관리", page_icon="🪨", layout="wide")
 
@@ -16,15 +16,13 @@ if 'logged_in' not in st.session_state:
 if 'user_info' not in st.session_state:
     st.session_state['user_info'] = {}
 
-# 데이터 캐싱을 위한 세션 상태 초기화
+# 캐싱 초기화
 if 'cached_logs' not in st.session_state:
     st.session_state['cached_logs'] = None
 if 'cached_plans' not in st.session_state:
     st.session_state['cached_plans'] = None
 if 'cached_users' not in st.session_state:
     st.session_state['cached_users'] = None
-if 'last_fetch_time' not in st.session_state:
-    st.session_state['last_fetch_time'] = 0
 
 @st.cache_resource
 def get_client():
@@ -51,7 +49,7 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 핵심 함수 (데이터 로딩 최적화)
+# 2. 핵심 함수
 # ---------------------------------------------------------
 def login(username, password):
     try:
@@ -66,8 +64,7 @@ def login(username, password):
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
                 st.success(f"환영합니다, {user['이름']}님!")
-                # 로그인 성공 시 데이터 한 번 싹 긁어오기
-                refresh_data() 
+                refresh_data()
                 time.sleep(0.5)
                 st.rerun()
                 return
@@ -75,32 +72,20 @@ def login(username, password):
     except Exception as e:
         st.error(f"로그인 오류: {e}")
 
-# ★ 핵심: 데이터를 매번 부르지 않고, 필요할 때만 부르는 함수
 def refresh_data():
     try:
         wb = client.open(SPREADSHEET_NAME)
-        # 운영일지 로드
-        ws_log = wb.worksheet("운영일지")
-        st.session_state['cached_logs'] = pd.DataFrame(ws_log.get_all_records())
-        
-        # 월간계획 로드
+        st.session_state['cached_logs'] = pd.DataFrame(wb.worksheet("운영일지").get_all_records())
         try:
-            ws_plan = wb.worksheet("월간계획")
-            st.session_state['cached_plans'] = pd.DataFrame(ws_plan.get_all_records())
+            st.session_state['cached_plans'] = pd.DataFrame(wb.worksheet("월간계획").get_all_records())
         except:
             st.session_state['cached_plans'] = pd.DataFrame()
-            
-        # 사용자 로드
-        ws_user = wb.worksheet("사용자")
-        st.session_state['cached_users'] = pd.DataFrame(ws_user.get_all_records())
-        
-        st.session_state['last_fetch_time'] = time.time()
+        st.session_state['cached_users'] = pd.DataFrame(wb.worksheet("사용자").get_all_records())
         return True
     except Exception as e:
-        st.error(f"데이터 새로고침 실패: {e}")
+        st.error(f"데이터 로드 실패: {e}")
         return False
 
-# 데이터가 없으면 불러오고, 있으면 그냥 씀
 def get_data(type="logs"):
     if type == "logs":
         if st.session_state['cached_logs'] is None: refresh_data()
@@ -122,7 +107,6 @@ def save_log(data):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
         sheet.append_row(data)
-        # 저장 후에는 데이터가 바뀌었으니 새로고침 예약
         st.session_state['cached_logs'] = None 
         return True
     except Exception as e:
@@ -155,8 +139,7 @@ def save_plan_bulk(rows):
 def update_status_to_approve(target_indices):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
-        # 인덱스 역순 정렬 (아래서부터 지우거나 수정해야 꼬이지 않음)
-        # 여기서는 update_cell이므로 상관없으나 안전하게 처리
+        # J열(10번째)이 '상태'라고 가정
         for idx in target_indices:
             row_num = idx + 2 
             sheet.update_cell(row_num, 10, "승인완료") 
@@ -186,13 +169,10 @@ else:
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
         st.caption(f"📍 소속: {my_island}")
-        
-        # 수동 새로고침 버튼 (혹시 남이 올린거 보고 싶을 때)
         if st.button("🔄 데이터 최신화"):
-            with st.spinner("데이터 동기화 중..."):
+            with st.spinner("동기화 중..."):
                 refresh_data()
             st.success("완료!")
-        
         st.divider()
         if st.button("로그아웃"):
             st.session_state['logged_in'] = False
@@ -210,33 +190,25 @@ else:
 
     tabs = st.tabs(tabs_list)
 
-    # -----------------------------------------------------
-    # 탭 1: 활동 입력 (속도 개선)
-    # -----------------------------------------------------
+    # 탭 1: 활동 입력
     with tabs[0]:
         st.subheader("활동 실적 등록")
         
-        # 1. 섬 선택
         if my_role == "관리자":
             sel_island = st.selectbox("📍 어느 섬의 활동인가요?", list(locations.keys()))
         else:
             sel_island = my_island
 
-        # 2. 해설사 선택
         target_name = my_name
         if my_role == "관리자":
             all_users_info = get_all_users_full()
             filtered_users = [u['이름'] for u in all_users_info if u.get('섬') == sel_island]
-            
             if filtered_users:
                 target_name = st.selectbox("👤 해설사 선택", filtered_users)
             else:
-                st.warning(f"{sel_island}에 소속된 해설사가 없습니다.")
                 target_name = st.text_input("이름 직접 입력") 
         
         st.divider()
-        
-        # 3. 입력 방식
         input_mode = st.radio("입력 방식", ["하루씩 입력 (기본)", "기간 일괄 입력 (엑셀형)"], horizontal=True)
         st.caption(f"현재 **[{sel_island}]** - **[{target_name}]**님의 활동을 입력합니다.")
 
@@ -252,24 +224,26 @@ else:
                 w_hours = st.number_input("활동 시간", min_value=0, value=8)
             with c4:
                 visitors = st.number_input("방문객(명)", min_value=0)
-                
-            listeners = st.number_input("해설 청취자(명)", min_value=0)
-            counts = st.number_input("해설 횟수(회)", min_value=0)
+            
+            # 여기서 '해설횟수'로 통일
+            listeners = st.number_input("청취자(명)", min_value=0)
+            counts = st.number_input("해설횟수(회)", min_value=0)
 
             if st.button(f"저장하기 ({target_name})", type="primary"):
+                # 저장 순서: 날짜, 섬, 장소, 이름, 활동시간, 방문자, 청취자, 해설횟수, 타임스탬프, 상태
                 row = [
                     str(input_date), sel_island, sel_place, target_name, 
                     w_hours, visitors, listeners, counts, 
                     str(datetime.now()), "검토대기"
                 ]
                 if save_log(row):
-                    st.success(f"✅ {target_name}님의 기록이 저장되었습니다!")
-                    time.sleep(1) # 저장 후 데이터 갱신 대기
+                    st.success("✅ 저장 완료!")
+                    time.sleep(1)
                     refresh_data()
                     st.rerun()
 
         else:
-            # 일괄 입력 (엑셀형)
+            # 엑셀형 입력
             col_y, col_m = st.columns(2)
             with col_y:
                 target_year = st.number_input("년도", value=datetime.now().year)
@@ -279,7 +253,7 @@ else:
             period_type = st.radio("기간 선택", ["전반기 (1일 ~ 15일)", "후반기 (16일 ~ 말일)"], horizontal=True, key="act_period")
             sel_place = st.selectbox("근무 장소", locations.get(sel_island, ["장소없음"]), key="act_place")
             
-            st.info("👇 아래 표에서 **근무한 날짜를 체크(v)**하고, **시간**과 **방문객 수**를 각각 입력하세요.")
+            st.info("👇 근무한 날짜를 **체크(v)**하고 실적을 입력하세요.")
 
             _, last_day = calendar.monthrange(target_year, target_month)
             if "전반기" in period_type:
@@ -294,11 +268,7 @@ else:
                 weekday = dt.strftime("%a")
                 data_list.append([False, day_str, weekday, "8시간", 0, 0, 0, 0])
             
-            df_input = pd.DataFrame(data_list, columns=[
-                "근무", "날짜", "요일", 
-                "활동시간", "시간(직접)", 
-                "방문객", "청취자", "해설횟수"
-            ])
+            df_input = pd.DataFrame(data_list, columns=["근무", "날짜", "요일", "활동시간", "시간(직접)", "방문자", "청취자", "해설횟수"])
 
             edited_df = st.data_editor(
                 df_input,
@@ -306,21 +276,20 @@ else:
                     "근무": st.column_config.CheckboxColumn("선택", width="small", default=False),
                     "날짜": st.column_config.TextColumn("날짜", width="small", disabled=True),
                     "요일": st.column_config.TextColumn("요일", width="small", disabled=True),
-                    "활동시간": st.column_config.SelectboxColumn("활동 시간", options=["8시간", "4시간", "직접입력"], default="8시간", width="medium"),
-                    "시간(직접)": st.column_config.NumberColumn("입력", min_value=0, max_value=24, help="직접입력 선택 시 시간 기입", width="small"),
-                    "방문객": st.column_config.NumberColumn("방문객(명)", min_value=0, default=0),
-                    "청취자": st.column_config.NumberColumn("청취자(명)", min_value=0, default=0),
+                    "활동시간": st.column_config.SelectboxColumn("시간", options=["8시간", "4시간", "직접입력"], default="8시간", width="medium"),
+                    "시간(직접)": st.column_config.NumberColumn("입력", min_value=0, max_value=24, width="small"),
+                    "방문자": st.column_config.NumberColumn("방문자", min_value=0, default=0),
+                    "청취자": st.column_config.NumberColumn("청취자", min_value=0, default=0),
                     "해설횟수": st.column_config.NumberColumn("해설(회)", min_value=0, default=0),
                 },
                 hide_index=True,
                 use_container_width=True
             )
 
-            if st.button(f"선택한 날짜 일괄 저장 ({target_name})"):
+            if st.button(f"일괄 저장 ({target_name})"):
                 selected_rows = edited_df[edited_df["근무"] == True]
-                
                 if selected_rows.empty:
-                    st.warning("⚠️ 저장할 날짜를 하나 이상 체크해주세요.")
+                    st.warning("⚠️ 저장할 날짜를 체크해주세요.")
                 else:
                     rows_to_add = []
                     for index, row in selected_rows.iterrows():
@@ -330,27 +299,26 @@ else:
                         elif row["활동시간"] == "직접입력": final_hours = row["시간(직접)"]
                         
                         if row["활동시간"] == "직접입력" and final_hours == 0:
-                             st.warning(f"⚠️ {row['날짜']}: 시간을 0으로 입력하셨습니다.")
+                             st.warning(f"⚠️ {row['날짜']}: 시간 0임. 저장 제외.")
                              continue
 
                         rows_to_add.append([
                             row["날짜"], sel_island, sel_place, target_name, 
                             final_hours, 
-                            row["방문객"], row["청취자"], row["해설횟수"], 
+                            row["방문자"], row["청취자"], row["해설횟수"], 
                             str(datetime.now()), "검토대기"
                         ])
                     
                     if rows_to_add:
                         if save_log_bulk(rows_to_add):
-                            st.success(f"✅ 총 {len(rows_to_add)}건의 실적이 등록되었습니다!")
+                            st.success(f"✅ {len(rows_to_add)}건 저장 완료!")
                             time.sleep(1)
                             refresh_data()
                             st.rerun()
 
-    # 탭 2: 내 활동 조회 (캐싱 적용)
+    # 탭 2: 내 활동 조회
     with tabs[1]:
         st.subheader("내 과거 기록 확인")
-        # 버튼을 안 눌러도, 탭에 들어오면 바로 보이게 변경 (캐싱 덕분에 빠름)
         df = get_data("logs")
         if df is not None and not df.empty:
             my_df = df[df['이름'] == my_name].copy()
@@ -362,9 +330,9 @@ else:
             else:
                 st.info("기록이 없습니다.")
         else:
-            st.info("데이터를 불러오는 중입니다...")
+            st.info("데이터 로딩 중...")
 
-    # 탭 3: 계획 (캐싱 적용)
+    # 탭 3: 계획
     with tabs[2]:
         st.subheader("🗓️ 근무 계획 일괄 등록")
         col_y, col_m = st.columns(2)
@@ -372,11 +340,10 @@ else:
             plan_year = st.number_input("년도", value=datetime.now().year, key="plan_y")
         with col_m:
             plan_month = st.number_input("월", value=datetime.now().month, min_value=1, max_value=12, key="plan_m")
-
         period_type = st.radio("기간 선택", ["전반기 (1일 ~ 15일)", "후반기 (16일 ~ 말일)"], horizontal=True, key="plan_period")
         plan_place = st.selectbox("예정 근무지", locations.get(my_island, ["-"]), key="plan_place")
         plan_note = st.text_input("비고 (특이사항)", key="plan_note")
-
+        
         _, last_day = calendar.monthrange(plan_year, plan_month)
         if "전반기" in period_type:
             day_range = range(1, 16)
@@ -388,9 +355,9 @@ else:
             dt = datetime(plan_year, plan_month, d)
             day_str = dt.strftime("%d일 (%a)")
             day_options.append(day_str)
-
-        st.write("▼ 근무할 날짜를 터치해서 선택하세요")
-        selected_days_str = st.multiselect("날짜 선택 (여러 개 가능)", day_options, key="plan_dates")
+        
+        st.write("▼ 근무할 날짜를 체크하세요")
+        selected_days_str = st.multiselect("날짜 선택", day_options, key="plan_dates")
 
         if st.button(f"{len(selected_days_str)}일치 계획 제출", key="plan_btn"):
             if not selected_days_str:
@@ -408,49 +375,51 @@ else:
                         refresh_data()
                         st.rerun()
 
-    # 탭 4: 검토 (캐싱 적용)
+    # 탭 4: 검토
     if my_role in ["조장", "관리자"]:
         with tabs[3]:
             st.subheader("👀 조원 활동/계획 검토")
-            check_type = st.radio("확인할 항목:", ["✅ 활동 내역 (승인)", "📅 월간 계획 (조회)"], horizontal=True)
+            check_type = st.radio("확인 항목:", ["✅ 활동 내역 (승인)", "📅 월간 계획 (조회)"], horizontal=True)
             st.divider()
 
             if "활동 내역" in check_type:
                 df = get_data("logs")
-                if df is not None:
-                    # 필터링
-                    if my_role != "관리자":
-                        df = df[df['섬'] == my_island]
-                    
-                    view_option = st.checkbox("검토 대기 건만 보기", value=True)
-                    if view_option:
-                        display_df = df[df['상태'] == "검토대기"].copy()
+                if df is not None and not df.empty:
+                    # 안전장치: '상태' 컬럼이 없으면 에러 방지
+                    if '상태' not in df.columns:
+                        st.error("🚨 시트에 '상태' 열이 없습니다! 1행을 확인해주세요.")
                     else:
-                        display_df = df.copy()
-                    
-                    if '날짜' in display_df.columns:
-                         display_df['날짜'] = pd.to_datetime(display_df['날짜'])
-                         display_df = display_df.sort_values(by='날짜', ascending=False)
-                    st.dataframe(display_df)
-                    
-                    pending_df = df[df['상태'] == "검토대기"]
-                    if not pending_df.empty:
-                        st.write("#### 📢 승인 처리")
-                        pending_indices = pending_df.index.tolist()
-                        selected_indices = st.multiselect(
-                            "승인할 목록 선택:",
-                            options=pending_indices,
-                            format_func=lambda x: f"{df.loc[x]['날짜']} - {df.loc[x]['이름']} ({df.loc[x]['장소']})"
-                        )
-                        if st.button("선택 항목 승인하기"):
-                            if update_status_to_approve(selected_indices):
-                                st.success("승인 완료!")
-                                time.sleep(1)
-                                refresh_data()
-                                st.rerun()
+                        if my_role != "관리자":
+                            df = df[df['섬'] == my_island]
+                        
+                        view_option = st.checkbox("검토 대기 건만 보기", value=True)
+                        if view_option:
+                            display_df = df[df['상태'] == "검토대기"].copy()
+                        else:
+                            display_df = df.copy()
+                        
+                        if '날짜' in display_df.columns:
+                            display_df['날짜'] = pd.to_datetime(display_df['날짜'])
+                            display_df = display_df.sort_values(by='날짜', ascending=False)
+                        st.dataframe(display_df)
+                        
+                        pending_df = df[df['상태'] == "검토대기"]
+                        if not pending_df.empty:
+                            st.write("#### 📢 승인 처리")
+                            pending_indices = pending_df.index.tolist()
+                            selected_indices = st.multiselect(
+                                "승인할 목록 선택:",
+                                options=pending_indices,
+                                format_func=lambda x: f"{df.loc[x]['날짜']} - {df.loc[x]['이름']} ({df.loc[x]['장소']})"
+                            )
+                            if st.button("선택 항목 승인하기"):
+                                if update_status_to_approve(selected_indices):
+                                    st.success("승인 완료!")
+                                    time.sleep(1)
+                                    refresh_data()
+                                    st.rerun()
 
             else:
-                # 계획 조회
                 df = get_data("plans")
                 if df is not None and not df.empty:
                     if my_role != "관리자":
@@ -458,39 +427,35 @@ else:
                     if '날짜' in df.columns:
                         df['날짜'] = pd.to_datetime(df['날짜'])
                         df = df.sort_values(by='날짜')
-                    st.write(f"📊 **{my_island if my_role != '관리자' else '전체'}** 근무 계획")
                     st.dataframe(df)
                 else:
                     st.info("등록된 계획이 없습니다.")
 
-# -----------------------------------------------------
-    # 탭 5: 통계 (에러 방지 강화판)
-    # -----------------------------------------------------
+    # 탭 5: 통계
     if my_role == "관리자":
         with tabs[4]:
             st.subheader("📊 운영 현황 대시보드")
-            
-            # 캐싱된 데이터 가져오기
             df = get_data("logs")
-            
             if df is not None and not df.empty:
-                df = df.copy() # 원본 보호
+                df = df.copy()
+                # 컬럼 이름 통일 ('횟수' -> '해설횟수')
                 
-                # ★ 여기가 수정되었습니다 (안전장치 추가)
-                # '방문자' 컬럼이 없으면 0으로 채운 컬럼 생성
-                if '방문자' not in df.columns:
-                    df['방문자'] = 0
-                else:
+                # 방문자 처리
+                if '방문자' in df.columns:
                     df['방문자'] = pd.to_numeric(df['방문자'], errors='coerce').fillna(0)
-                
-                # '횟수' 컬럼이 없으면 0으로 채운 컬럼 생성 (이게 에러 원인이었음!)
-                if '횟수' not in df.columns:
-                    df['횟수'] = 0
                 else:
-                    df['횟수'] = pd.to_numeric(df['횟수'], errors='coerce').fillna(0)
+                    df['방문자'] = 0
                 
+                # 해설횟수 처리 (혹시 몰라 횟수/해설횟수 둘다 체크)
+                if '해설횟수' in df.columns:
+                    df['해설횟수'] = pd.to_numeric(df['해설횟수'], errors='coerce').fillna(0)
+                elif '횟수' in df.columns:
+                    df['해설횟수'] = pd.to_numeric(df['횟수'], errors='coerce').fillna(0)
+                else:
+                    df['해설횟수'] = 0
+
                 total_visitors = int(df['방문자'].sum())
-                total_counts = int(df['횟수'].sum())
+                total_counts = int(df['해설횟수'].sum())
                 
                 m1, m2 = st.columns(2)
                 m1.metric("👥 총 방문객", f"{total_visitors:,}명")
@@ -499,25 +464,19 @@ else:
                 st.divider()
                 st.write("### 📈 상세 분석")
                 chart1, chart2 = st.columns(2)
-                
                 with chart1:
-                    st.write("##### 🏝️ 섬별 방문객 (막대)")
+                    st.write("##### 🏝️ 섬별 방문객")
                     if '섬' in df.columns:
                         island_df = df.groupby("섬")['방문자'].sum()
                         st.bar_chart(island_df)
-                    else:
-                        st.error("⚠️ '섬' 데이터가 없습니다.")
-                        
                 with chart2:
-                    st.write("##### 🗓️ 일별 활동 추이 (꺾은선)")
+                    st.write("##### 🗓️ 일별 활동 추이")
                     if '날짜' in df.columns:
                         try:
                             df['날짜'] = pd.to_datetime(df['날짜'])
                             daily_df = df.groupby("날짜")['방문자'].sum()
                             st.line_chart(daily_df)
                         except:
-                            st.caption("⚠️ 날짜 형식이 맞지 않아 그래프를 그릴 수 없습니다.")
-                    else:
-                        st.error("⚠️ '날짜' 데이터가 없습니다.")
+                            st.caption("날짜 데이터 형식 오류")
             else:
                 st.info("데이터가 없습니다.")
