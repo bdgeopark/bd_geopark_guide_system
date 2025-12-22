@@ -42,36 +42,32 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 기능 함수 (★ 로그인 함수 수정됨)
+# 2. 기능 함수 (★ 캐싱 기능 추가로 끊김 방지)
 # ---------------------------------------------------------
 def login(username, password):
-    # 1. DB 연결 시도
     if client is None:
-        st.error("서버 연결 실패 (인증키 확인 필요)")
+        st.error("서버 연결 실패")
         return
-
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("사용자")
         users = sheet.get_all_records()
+        for user in users:
+            if str(user['아이디']) == str(username) and str(user['비번']) == str(password):
+                st.session_state['logged_in'] = True
+                st.session_state['user_info'] = user
+                st.success(f"환영합니다, {user['이름']}님!")
+                time.sleep(0.5)
+                st.rerun()
+                return
+        st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
     except Exception as e:
-        st.error(f"사용자 DB를 불러올 수 없습니다: {e}")
-        return
+        st.error(f"로그인 처리 중 오류: {e}")
 
-    # 2. 아이디/비번 확인
-    for user in users:
-        if str(user['아이디']) == str(username) and str(user['비번']) == str(password):
-            st.session_state['logged_in'] = True
-            st.session_state['user_info'] = user
-            st.success(f"환영합니다, {user['이름']}님!")
-            time.sleep(0.5)
-            st.rerun() # 여기서 에러처리에 잡히지 않도록 구조 변경함
-            return
-
-    # 3. 반복문이 끝날 때까지 못 찾으면 실패
-    st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
-
-def get_users_by_island(island_name):
+# ★ 명단을 1시간(3600초)동안 기억해서 드롭박스 사라짐 방지
+@st.cache_data(ttl=3600)
+def get_users_by_island_cached(island_name):
     try:
+        if client is None: return []
         sheet = client.open(SPREADSHEET_NAME).worksheet("사용자")
         users = sheet.get_all_records()
         return [u['이름'] for u in users if u.get('섬') == island_name]
@@ -99,9 +95,7 @@ if not st.session_state['logged_in']:
     with st.form("login"):
         uid = st.text_input("아이디")
         upw = st.text_input("비밀번호", type="password")
-        # 엔터키나 버튼 누르면 로그인 실행
-        if st.form_submit_button("로그인"): 
-            login(uid, upw)
+        if st.form_submit_button("로그인"): login(uid, upw)
 else:
     user = st.session_state['user_info']
     my_name = user['이름']
@@ -110,8 +104,9 @@ else:
 
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
-        # ★ 초기화 버튼
-        if st.button("🔄 입력화면 초기화"):
+        # ★ 강제 새로고침 버튼 (혹시라도 명단 갱신 필요할 때)
+        if st.button("🔄 명단/화면 새로고침"):
+            st.cache_data.clear() # 기억된 명단 지우고 다시 불러오기
             st.session_state['generated_df'] = None
             st.session_state['active_guides'] = []
             st.rerun()
@@ -148,24 +143,27 @@ else:
 
         st.divider()
 
-        # 2. 해설사 추가하기
-        st.markdown("##### ➕ 이번 기간에 활동한 해설사 추가")
-        island_users = get_users_by_island(sel_island)
+        # 2. 해설사 추가하기 (안정성 강화)
+        st.markdown("##### ➕ 해설사 명단 구성")
+        
+        # 캐싱된 함수 사용 (끊김 방지)
+        island_users = get_users_by_island_cached(sel_island)
         
         col_add1, col_add2, col_btn = st.columns([2, 1, 1])
         with col_add1:
             if island_users:
-                selected_user_db = st.selectbox("명단에서 선택", ["선택안함"] + island_users)
+                selected_user_db = st.selectbox("한 명씩 추가", ["선택안함"] + island_users)
             else:
                 selected_user_db = "선택안함"
-                st.caption("⚠️ 명단 없음")
+                st.caption("⚠️ 불러올 명단이 없습니다.")
         
         with col_add2:
             manual_name = st.text_input("직접 입력 (명단에 없을 때)")
         
         with col_btn:
             st.write("") 
-            if st.button("추가하기", type="primary"):
+            # 한 명 추가 버튼
+            if st.button("한 명 추가", type="primary"):
                 name_to_add = ""
                 if manual_name.strip(): name_to_add = manual_name.strip()
                 elif selected_user_db != "선택안함": name_to_add = selected_user_db
@@ -174,26 +172,50 @@ else:
                     if name_to_add not in st.session_state['active_guides']:
                         st.session_state['active_guides'].append(name_to_add)
                         st.rerun()
-                    else: st.warning("이미 추가됨")
-                else: st.warning("이름 확인 필요")
+                    else: st.warning("이미 목록에 있습니다.")
+                else: st.warning("이름을 선택해주세요.")
 
-        # 3. 날짜 체크
+        # ★ [전원 추가] 버튼 (박사님 요청 기능!)
+        if my_role == "관리자" and island_users:
+            if st.button(f"🚀 {sel_island} 해설사 전원({len(island_users)}명) 한 번에 추가"):
+                # 기존 목록에 없는 사람만 싹 다 추가
+                count = 0
+                for u in island_users:
+                    if u not in st.session_state['active_guides']:
+                        st.session_state['active_guides'].append(u)
+                        count += 1
+                if count > 0:
+                    st.success(f"{count}명 추가 완료!")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.info("이미 모두 추가되어 있습니다.")
+
+        # 3. 추가된 해설사별 근무일 체크
         _, last_day = calendar.monthrange(t_year, t_month)
         day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
         schedule_data = [] 
 
         if st.session_state['active_guides']:
-            st.write(f"📋 **총 {len(st.session_state['active_guides'])}명** 선택됨")
+            st.divider()
+            st.write(f"📋 **총 {len(st.session_state['active_guides'])}명** 작업 중")
             
+            # 전체 삭제 버튼 (편의성)
+            if st.button("🗑️ 명단 전체 비우기"):
+                st.session_state['active_guides'] = []
+                st.rerun()
+
             for guide in st.session_state['active_guides']:
                 with st.expander(f"🗓️ **{guide}**님 근무일 체크", expanded=True):
-                    if st.button(f"🗑️ {guide} 제외", key=f"del_{guide}"):
+                    # 개별 삭제
+                    if st.button(f"제외 X", key=f"del_{guide}", help=f"{guide}님을 명단에서 뺍니다."):
                         st.session_state['active_guides'].remove(guide)
                         st.rerun()
 
                     cols = st.columns(7)
                     for i, day in enumerate(day_range):
-                        key = f"chk_{guide}_{day}_{t_month}"
+                        # 키에 년도(t_year)까지 포함해서 중복/꼬임 방지
+                        key = f"chk_{guide}_{t_year}_{t_month}_{day}"
                         dt_obj = datetime(t_year, t_month, day)
                         weekday = dt_obj.strftime("%a")
                         label = f"{day}({weekday})"
@@ -206,10 +228,10 @@ else:
             
             st.divider()
             
-            # 4. 표 생성
-            if st.button("⬇️ 위에서 체크한 내용으로 표 생성"):
+            # 4. 표 생성 버튼
+            if st.button("⬇️ 위에서 체크한 내용으로 표 생성 (클릭)"):
                 if not schedule_data:
-                    st.warning("근무일을 하나 이상 체크해주세요.")
+                    st.warning("⚠️ 근무일을 하나 이상 체크해주세요.")
                 else:
                     rows = []
                     for item in schedule_data:
@@ -221,7 +243,7 @@ else:
                     st.rerun()
         
         else:
-            st.info("👆 위에서 **[추가하기]** 버튼으로 해설사를 추가해주세요.")
+            st.info("👆 위에서 해설사를 추가하면 달력이 나옵니다.")
 
         # 5. 입력 및 저장
         if st.session_state['generated_df'] is not None:
