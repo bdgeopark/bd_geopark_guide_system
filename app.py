@@ -194,7 +194,6 @@ else:
             counts = st.number_input("해설 횟수(회)", min_value=0)
 
             if st.button(f"'{target_name}'님 명의로 저장하기", type="primary"):
-                # ★ 여기가 수정되었습니다 (줄바꿈으로 안전하게!)
                 row = [
                     str(input_date), sel_island, sel_place, target_name, 
                     w_hours, visitors, listeners, counts, 
@@ -317,4 +316,159 @@ else:
                 my_df = df[df['이름'] == my_name]
                 if not my_df.empty:
                     if '날짜' in my_df.columns:
-                        my_df['날짜'] = pd.
+                        # ★ 여기가 아까 잘렸던 부분입니다!
+                        my_df['날짜'] = pd.to_datetime(my_df['날짜'])
+                        my_df = my_df.sort_values(by='날짜', ascending=False)
+                    st.dataframe(my_df)
+                else:
+                    st.info("기록이 없습니다.")
+            except:
+                st.error("데이터 로드 실패")
+
+    # 탭 3: 계획
+    with tabs[2]:
+        st.subheader("🗓️ 근무 계획 일괄 등록")
+        col_y, col_m = st.columns(2)
+        with col_y:
+            plan_year = st.number_input("년도", value=datetime.now().year, key="plan_y")
+        with col_m:
+            plan_month = st.number_input("월", value=datetime.now().month, min_value=1, max_value=12, key="plan_m")
+
+        period_type = st.radio("기간 선택", ["전반기 (1일 ~ 15일)", "후반기 (16일 ~ 말일)"], horizontal=True, key="plan_period")
+        plan_place = st.selectbox("예정 근무지", locations.get(my_island, ["-"]), key="plan_place")
+        plan_note = st.text_input("비고 (특이사항)", key="plan_note")
+
+        _, last_day = calendar.monthrange(plan_year, plan_month)
+        if "전반기" in period_type:
+            day_range = range(1, 16)
+        else:
+            day_range = range(16, last_day + 1)
+        
+        day_options = []
+        for d in day_range:
+            dt = datetime(plan_year, plan_month, d)
+            day_str = dt.strftime("%d일 (%a)")
+            day_options.append(day_str)
+
+        st.write("▼ 근무할 날짜를 터치해서 선택하세요")
+        selected_days_str = st.multiselect("날짜 선택 (여러 개 가능)", day_options, key="plan_dates")
+
+        if st.button(f"{len(selected_days_str)}일치 계획 제출", key="plan_btn"):
+            if not selected_days_str:
+                st.warning("⚠️ 날짜를 선택해주세요.")
+            else:
+                with st.spinner("저장 중..."):
+                    rows_to_add = []
+                    for s in selected_days_str:
+                        day_num = int(s.split("일")[0])
+                        real_date = datetime(plan_year, plan_month, day_num).strftime("%Y-%m-%d")
+                        rows_to_add.append([real_date, my_island, plan_place, my_name, plan_note, str(datetime.now())])
+                    
+                    if save_plan_bulk(rows_to_add):
+                        st.success(f"✅ {len(rows_to_add)}건 등록 완료!")
+                        time.sleep(1)
+                        st.rerun()
+
+    # 탭 4: 검토
+    if my_role in ["조장", "관리자"]:
+        with tabs[3]:
+            st.subheader("👀 조원 활동/계획 검토")
+            check_type = st.radio("확인할 항목:", ["✅ 활동 내역 (승인)", "📅 월간 계획 (조회)"], horizontal=True)
+            st.divider()
+
+            if "활동 내역" in check_type:
+                try:
+                    sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                    df = pd.DataFrame(sheet.get_all_records())
+                    if my_role != "관리자":
+                        df = df[df['섬'] == my_island]
+                    
+                    view_option = st.checkbox("검토 대기 건만 보기", value=True)
+                    if view_option:
+                        display_df = df[df['상태'] == "검토대기"]
+                    else:
+                        display_df = df
+                    
+                    if '날짜' in display_df.columns:
+                         display_df['날짜'] = pd.to_datetime(display_df['날짜'])
+                         display_df = display_df.sort_values(by='날짜', ascending=False)
+                         
+                    st.dataframe(display_df)
+                    
+                    pending_df = df[df['상태'] == "검토대기"]
+                    if not pending_df.empty:
+                        st.write("#### 📢 승인 처리")
+                        pending_indices = pending_df.index.tolist()
+                        selected_indices = st.multiselect(
+                            "승인할 목록 선택:",
+                            options=pending_indices,
+                            format_func=lambda x: f"{df.loc[x]['날짜']} - {df.loc[x]['이름']} ({df.loc[x]['장소']})"
+                        )
+                        if st.button("선택 항목 승인하기"):
+                            if update_status_to_approve(selected_indices):
+                                st.success("승인 완료!")
+                                time.sleep(1)
+                                st.rerun()
+                except Exception as e:
+                    st.error(f"로드 실패: {e}")
+
+            else:
+                try:
+                    sheet = client.open(SPREADSHEET_NAME).worksheet("월간계획")
+                    df = pd.DataFrame(sheet.get_all_records())
+                    if df.empty:
+                        st.info("등록된 계획이 없습니다.")
+                    else:
+                        if my_role != "관리자":
+                            df = df[df['섬'] == my_island]
+                        if '날짜' in df.columns:
+                            df['날짜'] = pd.to_datetime(df['날짜'])
+                            df = df.sort_values(by='날짜')
+                        st.write(f"📊 **{my_island if my_role != '관리자' else '전체'}** 근무 계획")
+                        st.dataframe(df)
+                except gspread.exceptions.WorksheetNotFound:
+                    st.error("🚨 '월간계획' 시트 없음")
+                except Exception as e:
+                    st.error(f"로드 실패: {e}")
+
+    # 탭 5: 통계
+    if my_role == "관리자":
+        with tabs[4]:
+            st.subheader("📊 운영 현황 대시보드")
+            try:
+                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                df = pd.DataFrame(sheet.get_all_records())
+                
+                if df.empty:
+                    st.info("데이터가 없습니다.")
+                else:
+                    df['방문자'] = pd.to_numeric(df['방문자'], errors='coerce').fillna(0)
+                    df['횟수'] = pd.to_numeric(df['횟수'], errors='coerce').fillna(0)
+                    
+                    total_visitors = int(df['방문자'].sum())
+                    total_counts = int(df['횟수'].sum())
+                    
+                    m1, m2 = st.columns(2)
+                    m1.metric("👥 총 방문객", f"{total_visitors:,}명")
+                    m2.metric("🗣️ 총 해설 횟수", f"{total_counts:,}회")
+                    
+                    st.divider()
+                    
+                    st.write("### 📈 상세 분석")
+                    chart1, chart2 = st.columns(2)
+                    
+                    with chart1:
+                        st.write("##### 🏝️ 섬별 방문객 (막대)")
+                        island_df = df.groupby("섬")['방문자'].sum()
+                        st.bar_chart(island_df)
+                        
+                    with chart2:
+                        st.write("##### 🗓️ 일별 활동 추이 (꺾은선)")
+                        try:
+                            df['날짜'] = pd.to_datetime(df['날짜'])
+                            daily_df = df.groupby("날짜")['방문자'].sum()
+                            st.line_chart(daily_df)
+                        except:
+                            st.caption("⚠️ 날짜 형식이 맞지 않아 추이 그래프를 그릴 수 없습니다.")
+            except Exception as e:
+                st.error(f"통계 로드 중 오류: {e}")
