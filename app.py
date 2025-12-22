@@ -11,7 +11,6 @@ import calendar
 # ---------------------------------------------------------
 st.set_page_config(page_title="지질공원 통합관리", page_icon="🪨", layout="wide")
 
-# ★ 글자 크기 키우기 (박사님 요청)
 st.markdown("""
     <style>
     html, body, [class*="css"] {
@@ -31,8 +30,10 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 # 단계별 데이터 저장소
 if 'step1_df' not in st.session_state: st.session_state['step1_df'] = None 
-if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {} # 여러 표 저장용
+if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {} 
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
+# ★ 입력 조건 변경 감지용 (이게 있어야 날짜가 바뀝니다!)
+if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 
 @st.cache_resource
 def get_client():
@@ -136,7 +137,7 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (2단계 분리 + 표 분리 구조)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]:
         st.subheader("활동 실적 등록")
@@ -156,6 +157,19 @@ else:
         with c5: sel_place = st.selectbox("근무 장소(공통)", locations.get(sel_island, ["-"]))
         
         island_users = get_users_by_island_cached(sel_island)
+        
+        # ★★★ 핵심 수정: 조건이 바뀌면 표를 초기화하는 로직 ★★★
+        # 현재 선택된 조건들을 하나의 문자열로 합쳐서 '키'로 만듭니다.
+        current_input_key = f"{t_year}-{t_month}-{sel_island}-{period}-{sel_place}"
+        
+        # 이전 키와 다르면 (즉, 조건이 바뀌었으면) 초기화!
+        if st.session_state['last_input_key'] != current_input_key:
+            st.session_state['step1_df'] = None
+            st.session_state['step2_dfs'] = {}
+            st.session_state['current_step'] = 1
+            st.session_state['last_input_key'] = current_input_key
+            st.rerun() # 화면 즉시 새로고침
+        
         st.divider()
 
         # =========================================================
@@ -165,6 +179,7 @@ else:
             st.markdown("### 1️⃣ 단계: 운영 현황 입력")
             st.info("👇 날짜별 **방문객 통계**와 **근무한 해설사 수**를 입력하세요.")
 
+            # 표 생성 (없을 때만)
             if st.session_state['step1_df'] is None:
                 _, last_day = calendar.monthrange(t_year, t_month)
                 day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
@@ -174,6 +189,7 @@ else:
                     dt_obj = datetime(t_year, t_month, d)
                     d_str = dt_obj.strftime("%Y-%m-%d")
                     wk = dt_obj.strftime("%a")
+                    # 기본값: 0명
                     rows.append([d_str, wk, 0, 0, 0, 0])
                 
                 st.session_state['step1_df'] = pd.DataFrame(rows, columns=["일자", "요일", "방문자", "청취자", "해설횟수", "활동해설사수"])
@@ -196,7 +212,6 @@ else:
                 stats_rows = []
                 max_guides = 0
                 
-                # 1. 통계 저장 준비
                 for _, row in edited_step1.iterrows():
                     has_stats = (row["방문자"] > 0 or row["청취자"] > 0 or row["해설횟수"] > 0)
                     g_count = int(row["활동해설사수"])
@@ -204,7 +219,7 @@ else:
                     
                     if has_stats:
                         stats_rows.append([
-                            row["일자"], sel_island, sel_place, "운영통계", # ★ 이름: 운영통계
+                            row["일자"], sel_island, sel_place, "운영통계", 
                             0, row["방문자"], row["청취자"], row["해설횟수"],
                             str(datetime.now()), "검토대기"
                         ])
@@ -212,22 +227,18 @@ else:
                 if not stats_rows and max_guides == 0:
                     st.warning("⚠️ 입력된 내용이 없습니다.")
                 else:
-                    # 통계 저장
                     if stats_rows:
                         save_bulk("운영일지", stats_rows)
                         st.toast("✅ 운영 통계 저장 완료!")
                     
                     if max_guides > 0:
-                        # 2단계 데이터 준비 (표를 여러 개로 쪼개기 위해 딕셔너리에 저장)
-                        # key: 1 (첫번째 해설사 표), 2 (두번째 해설사 표)...
+                        # 2단계 데이터 준비
                         dfs = {}
                         for k in range(1, max_guides + 1):
-                            # k번째 해설사가 필요한 날짜만 필터링
                             data_k = []
                             for _, row in edited_step1.iterrows():
                                 if int(row["활동해설사수"]) >= k:
                                     data_k.append([row["일자"], row["요일"], None, "8시간", 0])
-                            
                             dfs[k] = pd.DataFrame(data_k, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)"])
                         
                         st.session_state['step2_dfs'] = dfs
@@ -240,7 +251,7 @@ else:
                         st.rerun()
 
         # =========================================================
-        # [STEP 2] 해설사 활동 (표 분리 방식)
+        # [STEP 2] 해설사 활동
         # =========================================================
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
@@ -248,12 +259,9 @@ else:
             dfs = st.session_state['step2_dfs']
             total_tables = len(dfs)
             
-            # --- 반복문으로 표 생성 ---
             for k in range(1, total_tables + 1):
                 st.markdown(f"#### 👤 **{k}번 해설사** 활동 입력")
                 
-                # ★ 표 제목 위에서 이름 선택 (일괄 적용)
-                # 여기서 이름을 고르면 아래 표의 '해설사' 컬럼이 자동으로 채워집니다.
                 selected_name = st.selectbox(
                     f"👇 {k}번 해설사를 선택하세요 (일괄적용)", 
                     ["선택안함"] + island_users, 
@@ -261,41 +269,33 @@ else:
                 )
                 
                 df_k = dfs[k]
-                
-                # 선택된 이름이 있으면 표에 자동 반영 (아직 빈칸이거나 변경 시)
                 if selected_name != "선택안함":
                     df_k["해설사"] = selected_name
                 
-                # 에디터 출력
                 edited_k = st.data_editor(
                     df_k,
                     key=f"editor_{k}",
                     column_config={
                         "일자": st.column_config.TextColumn("일자", disabled=True, width="small"),
                         "요일": st.column_config.TextColumn("요일", disabled=True, width="small"),
-                        "해설사": st.column_config.TextColumn("해설사", width="medium", help="위에서 선택하면 자동입력됨"),
+                        "해설사": st.column_config.TextColumn("해설사", width="medium"),
                         "활동시간": st.column_config.SelectboxColumn("활동시간", options=["8시간", "4시간", "직접입력"], default="8시간"),
                         "시간(직접)": st.column_config.NumberColumn("입력", min_value=0, max_value=24, width="small"),
                     },
                     hide_index=True,
                     use_container_width=True
                 )
-                
-                # 수정된 내용 세션에 업데이트
                 st.session_state['step2_dfs'][k] = edited_k
                 st.divider()
 
-            # --- 하단 버튼 ---
             c_btn1, c_btn2 = st.columns([1, 1])
             with c_btn1:
                 if st.button("✅ 모든 해설사 활동 일괄 저장", type="primary"):
                     all_rows = []
                     missing_name = False
                     
-                    # 모든 표 순회하며 데이터 수집
                     for k in range(1, total_tables + 1):
                         df_target = st.session_state['step2_dfs'][k]
-                        
                         if df_target['해설사'].isnull().any() or (df_target['해설사'] == "선택안함").any():
                             missing_name = True
                             st.warning(f"⚠️ {k}번 표에 해설사가 선택되지 않은 날짜가 있습니다.")
@@ -305,7 +305,6 @@ else:
                             fh = 8
                             if row["활동시간"] == "4시간": fh = 4
                             elif row["활동시간"] == "직접입력": fh = row["시간(직접)"]
-                            
                             if row["활동시간"] == "직접입력" and fh == 0: continue
                             
                             all_rows.append([
@@ -318,7 +317,6 @@ else:
                         if save_bulk("운영일지", all_rows):
                             st.success(f"✅ 총 {len(all_rows)}건 저장 완료!")
                             time.sleep(2)
-                            # 초기화
                             st.session_state['step1_df'] = None
                             st.session_state['step2_dfs'] = {}
                             st.session_state['current_step'] = 1
