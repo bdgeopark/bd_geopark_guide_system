@@ -463,15 +463,31 @@ else:
                 else:
                     st.info("등록된 계획이 없습니다.")
 
-    # 탭 5: 통계 (캐싱 적용)
+# -----------------------------------------------------
+    # 탭 5: 통계 (에러 방지 강화판)
+    # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
             st.subheader("📊 운영 현황 대시보드")
+            
+            # 캐싱된 데이터 가져오기
             df = get_data("logs")
+            
             if df is not None and not df.empty:
                 df = df.copy() # 원본 보호
-                df['방문자'] = pd.to_numeric(df['방문자'], errors='coerce').fillna(0)
-                df['횟수'] = pd.to_numeric(df['횟수'], errors='coerce').fillna(0)
+                
+                # ★ 여기가 수정되었습니다 (안전장치 추가)
+                # '방문자' 컬럼이 없으면 0으로 채운 컬럼 생성
+                if '방문자' not in df.columns:
+                    df['방문자'] = 0
+                else:
+                    df['방문자'] = pd.to_numeric(df['방문자'], errors='coerce').fillna(0)
+                
+                # '횟수' 컬럼이 없으면 0으로 채운 컬럼 생성 (이게 에러 원인이었음!)
+                if '횟수' not in df.columns:
+                    df['횟수'] = 0
+                else:
+                    df['횟수'] = pd.to_numeric(df['횟수'], errors='coerce').fillna(0)
                 
                 total_visitors = int(df['방문자'].sum())
                 total_counts = int(df['횟수'].sum())
@@ -483,17 +499,25 @@ else:
                 st.divider()
                 st.write("### 📈 상세 분석")
                 chart1, chart2 = st.columns(2)
+                
                 with chart1:
                     st.write("##### 🏝️ 섬별 방문객 (막대)")
-                    island_df = df.groupby("섬")['방문자'].sum()
-                    st.bar_chart(island_df)
+                    if '섬' in df.columns:
+                        island_df = df.groupby("섬")['방문자'].sum()
+                        st.bar_chart(island_df)
+                    else:
+                        st.error("⚠️ '섬' 데이터가 없습니다.")
+                        
                 with chart2:
                     st.write("##### 🗓️ 일별 활동 추이 (꺾은선)")
-                    try:
-                        df['날짜'] = pd.to_datetime(df['날짜'])
-                        daily_df = df.groupby("날짜")['방문자'].sum()
-                        st.line_chart(daily_df)
-                    except:
-                        st.caption("⚠️ 날짜 데이터 오류")
+                    if '날짜' in df.columns:
+                        try:
+                            df['날짜'] = pd.to_datetime(df['날짜'])
+                            daily_df = df.groupby("날짜")['방문자'].sum()
+                            st.line_chart(daily_df)
+                        except:
+                            st.caption("⚠️ 날짜 형식이 맞지 않아 그래프를 그릴 수 없습니다.")
+                    else:
+                        st.error("⚠️ '날짜' 데이터가 없습니다.")
             else:
                 st.info("데이터가 없습니다.")
