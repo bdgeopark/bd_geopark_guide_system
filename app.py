@@ -11,10 +11,10 @@ import calendar
 # ---------------------------------------------------------
 st.set_page_config(page_title="지질공원 통합관리", page_icon="🪨", layout="wide")
 
-# 세션 초기화 (화면 유지용)
+# ★ 화면 기억장치 초기화 (이게 있어야 안 사라집니다!)
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-if 'generated_df' not in st.session_state: st.session_state['generated_df'] = None # 생성된 표 저장
+if 'generated_df' not in st.session_state: st.session_state['generated_df'] = None # 만들어진 표 저장
 
 @st.cache_resource
 def get_client():
@@ -99,6 +99,11 @@ else:
 
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
+        # ★ 초기화 버튼 (입력하다 꼬이면 이거 누르라고 하세요)
+        if st.button("🔄 입력화면 초기화"):
+            st.session_state['generated_df'] = None
+            st.rerun()
+        st.divider()
         if st.button("로그아웃"):
             st.session_state['logged_in'] = False
             st.session_state['generated_df'] = None
@@ -106,16 +111,15 @@ else:
 
     st.title(f"📱 {my_name}님의 업무공간")
 
-    # 탭 구성
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (요청하신 기능 구현)
+    # 탭 1: 활동 입력 (사라짐 방지 기능 적용)
     # -----------------------------------------------------
     with tabs[0]:
         st.subheader("활동 실적 등록")
         
-        # 1. 기본 설정
+        # 1. 설정값 입력
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1: t_year = st.number_input("년", value=datetime.now().year)
         with c2: t_month = st.number_input("월", value=datetime.now().month)
@@ -126,19 +130,20 @@ else:
                 sel_island = my_island
                 st.success(f"📍 {sel_island}")
 
-        # 2. 기간 및 장소
         c4, c5 = st.columns([1, 2])
         with c4: period = st.radio("기간", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True)
         with c5: sel_place = st.selectbox("근무 장소(공통)", locations.get(sel_island, ["-"]))
 
         st.divider()
 
-        # 3. 해설사 선택 및 날짜 체크 (핵심 기능!)
+        # 2. 해설사 선택 및 날짜 체크
         island_users = get_users_by_island(sel_island)
         if not island_users: island_users = ["해설사 없음"]
 
-        # 관리자는 여러 명 선택 가능, 일반인은 본인만
         if my_role == "관리자":
+            # 여기가 사라지지 않게 하려면 multiselect가 session_state와 연결될 필요는 없지만
+            # 리런되어도 값이 유지되도록 스트림릿이 알아서 처리합니다.
+            # 다만, 섬을 바꾸면 초기화됩니다.
             selected_guides = st.multiselect("📝 이번 기간에 활동한 해설사를 모두 선택하세요", island_users)
         else:
             selected_guides = [my_name]
@@ -148,46 +153,50 @@ else:
         _, last_day = calendar.monthrange(t_year, t_month)
         day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
 
-        # 해설사별 근무일 체크박스 생성
-        schedule_data = [] # (날짜, 이름) 저장용
+        # 체크박스 데이터 수집용 리스트
+        schedule_data = [] 
         
+        # ★ 해설사별 체크박스 화면 (여기가 중요!)
         if selected_guides:
             for guide in selected_guides:
-                with st.expander(f"🗓️ **{guide}**님 근무일 체크 (클릭)", expanded=True):
-                    cols = st.columns(5) # 5열로 배치
+                with st.expander(f"🗓️ **{guide}**님 근무일 체크", expanded=True):
+                    cols = st.columns(5)
                     for i, day in enumerate(day_range):
-                        # 체크박스 키를 유니크하게 생성
-                        key = f"{guide}_{day}_{t_month}" 
+                        # 키 값을 유니크하게 해서 상태 유지
+                        key = f"chk_{guide}_{day}_{t_month}" 
                         with cols[i % 5]:
                             if st.checkbox(f"{day}일", key=key):
-                                # 체크된 날짜만 수집
-                                full_date = datetime(t_year, t_month, day).strftime("%Y-%m-%d")
-                                weekday = datetime(t_year, t_month, day).strftime("%a")
+                                dt_obj = datetime(t_year, t_month, day)
+                                full_date = dt_obj.strftime("%Y-%m-%d")
+                                weekday = dt_obj.strftime("%a")
                                 schedule_data.append([full_date, guide, weekday])
 
-        # 4. 서식 생성 버튼
-        if st.button("⬇️ 위에서 체크한 내용으로 표 만들기"):
+        # 3. 표 만들기 버튼
+        # (버튼을 누르면 session_state에 데이터를 저장하고 화면을 다시 그립니다)
+        if st.button("⬇️ 위에서 체크한 내용으로 표 생성"):
             if not schedule_data:
-                st.warning("근무일을 하나 이상 체크해주세요.")
+                st.warning("⚠️ 근무일을 하나 이상 체크해주세요.")
             else:
                 # 데이터프레임 생성
-                # 컬럼: [날짜, 요일, 해설사, 활동시간(8), 시간(직접), 방문자, 청취자, 횟수]
                 rows = []
                 for item in schedule_data:
                     # item = [날짜, 이름, 요일]
+                    # 기본값: 8시간, 나머지 0
                     rows.append([item[0], item[2], item[1], "8시간", 0, 0, 0, 0])
                 
                 # 날짜순, 이름순 정렬
                 df = pd.DataFrame(rows, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)", "방문자", "청취자", "해설횟수"])
                 df = df.sort_values(by=["일자", "해설사"])
                 
-                st.session_state['generated_df'] = df
-                st.rerun() # 표를 보여주기 위해 한번만 새로고침
+                # ★★★ 여기가 핵심: 세션에 저장해둠! ★★★
+                st.session_state['generated_df'] = df 
+                st.rerun() # 화면 갱신 (이제 사라지지 않음)
 
-        # 5. 생성된 표 보여주기 및 입력
+        # 4. 생성된 표 보여주기 (세션에 데이터가 있을 때만)
         if st.session_state['generated_df'] is not None:
             st.divider()
-            st.info("👇 **시간**과 **실적**을 입력하고 저장하세요.")
+            st.success("✅ 표가 생성되었습니다. 내용을 입력하고 저장하세요.")
+            st.caption("※ 다시 선택하려면 왼쪽 메뉴의 [🔄 입력화면 초기화] 버튼을 누르세요.")
             
             edited_df = st.data_editor(
                 st.session_state['generated_df'],
@@ -203,20 +212,19 @@ else:
                 },
                 hide_index=True,
                 use_container_width=True,
-                num_rows="dynamic" # 줄 추가 가능
+                num_rows="dynamic"
             )
 
+            # 저장 버튼
             if st.button("✅ 작성 완료! 일괄 저장하기"):
                 rows_to_save = []
                 for _, row in edited_df.iterrows():
-                    # 시간 계산
                     fh = 8
                     if row["활동시간"] == "4시간": fh = 4
                     elif row["활동시간"] == "직접입력": fh = row["시간(직접)"]
                     
-                    if row["활동시간"] == "직접입력" and fh == 0: continue # 0시간 제외
+                    if row["활동시간"] == "직접입력" and fh == 0: continue
 
-                    # [날짜, 섬, 장소, 이름, 활동시간, 방문자, 청취자, 해설횟수, 타임스탬프, 상태]
                     rows_to_save.append([
                         row["일자"], sel_island, sel_place, row["해설사"], 
                         fh, row["방문자"], row["청취자"], row["해설횟수"], 
@@ -225,7 +233,7 @@ else:
                 
                 if save_bulk("운영일지", rows_to_save):
                     st.success(f"총 {len(rows_to_save)}건이 저장되었습니다!")
-                    st.session_state['generated_df'] = None # 저장 후 표 초기화
+                    st.session_state['generated_df'] = None # 저장 후 표 비우기
                     time.sleep(1)
                     st.rerun()
 
@@ -280,8 +288,9 @@ else:
                     df = df[df['상태'] == "검토대기"]
                     if not df.empty:
                         st.dataframe(df)
+                        indices = df.index.tolist()
                         if st.button("조회된 항목 일괄 승인"):
-                            approve_rows(df.index.tolist())
+                            approve_rows(indices)
                             st.success("승인 완료")
                     else: st.info("대기 건 없음")
                 except: st.error("로드 실패")
@@ -295,12 +304,12 @@ else:
                 try:
                     wb = client.open(SPREADSHEET_NAME)
                     df = pd.DataFrame(wb.worksheet("운영일지").get_all_records())
-                    # 숫자 변환
                     for col in ['방문자', '해설횟수']:
                         if col in df.columns:
                             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                         else: df[col] = 0
                     
                     st.metric("총 방문객", int(df['방문자'].sum()))
-                    st.bar_chart(df.groupby("섬")['방문자'].sum())
+                    if '섬' in df.columns:
+                        st.bar_chart(df.groupby("섬")['방문자'].sum())
                 except: st.error("로드 실패")
