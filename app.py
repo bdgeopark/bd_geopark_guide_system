@@ -75,34 +75,28 @@ def load_monthly_data():
         if data:
             return pd.DataFrame(data)
         else:
-            # 데이터 없으면 기본 틀 생성
             rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
             return pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
     except:
-        # 시트가 없거나 에러나면 기본 틀 반환
         rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
         return pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
 
-# ★ 입도객 데이터 저장하기 (시트로)
 def save_monthly_data_to_sheet(df):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("입도객현황")
-        sheet.clear() # 기존 내용 지우고
-        # 컬럼명 + 데이터 통째로 덮어쓰기
+        sheet.clear()
         sheet.update([df.columns.values.tolist()] + df.values.tolist())
         return True
     except Exception as e:
         st.error(f"저장 실패: '입도객현황' 시트가 있는지 확인해주세요. ({e})")
         return False
 
-# 앱 시작 시 데이터 로드 (한 번만)
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
 
 def login(username, password):
     if client is None: st.error("❌ 서버 연결 실패"); return
-    try:
-        doc = client.open(SPREADSHEET_NAME)
+    try: doc = client.open(SPREADSHEET_NAME)
     except: st.error(f"❌ '{SPREADSHEET_NAME}' 파일을 찾을 수 없습니다."); return
 
     try: sheet = doc.worksheet("사용자")
@@ -117,7 +111,7 @@ def login(username, password):
             if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
-                st.session_state['monthly_arrivals'] = load_monthly_data() # 로그인 시 데이터 로드
+                st.session_state['monthly_arrivals'] = load_monthly_data()
                 st.success(f"환영합니다, {user['이름']}님!")
                 time.sleep(0.5); st.rerun(); return
         st.error("🚫 아이디/비번 불일치")
@@ -132,8 +126,16 @@ def get_users_by_island_cached(island_name):
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
 
+# ★ [입력 깜빡임 해결 1] 입도객용 콜백
 def update_monthly_data_callback():
     st.session_state['monthly_arrivals'] = st.session_state["arrival_editor"]
+
+# ★ [입력 깜빡임 해결 2] 활동내역(Step 2)용 콜백 (핵심 추가!)
+def update_step2_data(k):
+    # k번 해설사의 에디터 키(ed_1, ed_2...)에서 데이터를 가져와서 원본(step2_dfs)에 즉시 저장
+    editor_key = f"ed_{k}"
+    if editor_key in st.session_state:
+        st.session_state['step2_dfs'][k] = st.session_state[editor_key]
 
 def save_overwrite(sheet_name, new_rows):
     try:
@@ -206,15 +208,11 @@ else:
     st.title(f"📱 {my_name}님의 업무공간")
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
-    # 탭 1~4 (기존과 동일)
+    # -----------------------------------------------------
+    # 탭 1: 활동 입력 (★ 여기가 수정되었습니다)
+    # -----------------------------------------------------
     with tabs[0]: 
         st.subheader("활동 실적 등록")
-        # ... (이전 코드와 동일, 생략 없이 작동) ...
-        # (지면 관계상 핵심 로직 유지하고 위쪽 코드는 이전과 동일하게 들어갑니다)
-        # ※ 실제 사용시는 이전 답변의 '활동 입력' 부분 코드가 그대로 있어야 합니다.
-        # 편의를 위해 '통계' 탭 부분만 집중적으로 수정되었습니다.
-        
-        # (여기서부터 활동 입력 UI 코드 복원)
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1: t_year = st.number_input("년", value=datetime.now().year)
         with c2: t_month = st.number_input("월", value=datetime.now().month)
@@ -239,22 +237,28 @@ else:
                 rows = [[datetime(t_year, t_month, d).strftime("%Y-%m-%d"), datetime(t_year, t_month, d).strftime("%a"), 0, 0, 0, 0] for d in day_range]
                 st.session_state['step1_df'] = pd.DataFrame(rows, columns=["일자", "요일", "방문자", "청취자", "해설횟수", "활동해설사수"])
             
+            # Step 1 에디터
             edited_step1 = st.data_editor(st.session_state['step1_df'], hide_index=True, use_container_width=True)
+            
             if st.button("💾 저장 및 다음 단계"):
+                # (1) 에디터의 최신 값을 세션 스테이트에 저장 (엔터 안 쳐도 반영되게)
+                st.session_state['step1_df'] = edited_step1 
+                
                 stats_rows = []
                 max_guides = 0
-                for _, row in edited_step1.iterrows():
+                for _, row in st.session_state['step1_df'].iterrows(): # 여기서 edited_step1 대신 session_state 사용
                     g_cnt = int(row["활동해설사수"])
                     if g_cnt > max_guides: max_guides = g_cnt
                     if row["방문자"]>0 or row["청취자"]>0 or row["해설횟수"]>0:
                         stats_rows.append([row["일자"], sel_island, sel_place, "운영통계", 0, row["방문자"], row["청취자"], row["해설횟수"], str(datetime.now()), "검토대기"])
                 if stats_rows: 
                     if save_overwrite("운영일지", stats_rows): st.toast("✅ 저장 완료!")
+                
                 if max_guides > 0:
                     dfs = {}
                     for k in range(1, max_guides+1):
                         data_k = []
-                        for _, row in edited_step1.iterrows():
+                        for _, row in st.session_state['step1_df'].iterrows():
                             if int(row["활동해설사수"]) >= k: data_k.append([row["일자"], row["요일"], None, "8시간", 0])
                         dfs[k] = pd.DataFrame(data_k, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)"])
                     st.session_state['step2_dfs'] = dfs; st.session_state['current_step'] = 2; st.rerun()
@@ -263,11 +267,28 @@ else:
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
             dfs = st.session_state['step2_dfs']
+            
             for k in range(1, len(dfs)+1):
                 st.markdown(f"#### 👤 **{k}번 해설사**")
-                s_name = st.selectbox(f"{k}번 이름", ["선택안함"]+island_users, key=f"sel_{k}")
-                if s_name != "선택안함": dfs[k]["해설사"] = s_name
-                st.session_state['step2_dfs'][k] = st.data_editor(dfs[k], key=f"ed_{k}", hide_index=True, use_container_width=True)
+                
+                # 일괄 선택
+                track_key = f"last_sel_{k}"
+                if track_key not in st.session_state: st.session_state[track_key] = "선택안함"
+                s_name = st.selectbox(f"{k}번 이름 (일괄적용)", ["선택안함"]+island_users, key=f"sel_{k}")
+                if s_name != st.session_state[track_key]:
+                    if s_name != "선택안함": st.session_state['step2_dfs'][k]["해설사"] = s_name
+                    st.session_state[track_key] = s_name
+                
+                # ★ 여기가 핵심: on_change + args를 사용해 '입력 즉시 저장' 구현
+                st.data_editor(
+                    st.session_state['step2_dfs'][k], 
+                    key=f"ed_{k}", 
+                    hide_index=True, 
+                    use_container_width=True,
+                    on_change=update_step2_data, # 변경 감지 시 실행할 함수
+                    args=(k,)                    # 함수에 넘겨줄 인자 (몇 번 해설사인지)
+                )
+
             if st.button("✅ 일괄 저장"):
                 all_r = []
                 for k in dfs:
@@ -279,6 +300,8 @@ else:
                         if fh==0: continue
                         all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, str(datetime.now()), "검토대기"])
                 if save_overwrite("운영일지", all_r): st.success("저장 완료"); time.sleep(1); st.session_state['step1_df']=None; st.session_state['current_step']=1; st.rerun()
+            
+            if st.button("🔙 뒤로가기"): st.session_state['current_step']=1; st.rerun()
 
     with tabs[1]: # 조회
         if st.button("내역 조회"):
@@ -313,7 +336,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계 (저장 기능 추가됨!)
+    # 탭 5: 고급 통계
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -337,10 +360,9 @@ else:
                     hide_index=True, 
                     use_container_width=True,
                     key="arrival_editor",
-                    on_change=update_monthly_data_callback
+                    on_change=update_monthly_data_callback # 여기도 콜백 적용됨
                 )
                 
-                # ★ 저장 버튼 추가
                 if st.button("💾 입도객 데이터 서버에 저장하기"):
                     if save_monthly_data_to_sheet(new_arrivals):
                         st.success("✅ 구글 시트('입도객현황')에 안전하게 저장되었습니다.")
