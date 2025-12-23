@@ -25,7 +25,6 @@ st.markdown("""
     html, body, [class*="css"] { font-size: 18px !important; }
     div[data-testid="stDataEditor"] table { font-size: 18px !important; }
     div[data-testid="stSelectbox"] * { font-size: 18px !important; }
-    div[data-testid="stMultiSelect"] * { font-size: 18px !important; }
     div[data-testid="stForm"] { border: 2px solid #f0f2f6; padding: 20px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -33,9 +32,8 @@ st.markdown("""
 # 세션 초기화
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-# 데이터 저장소 (구조 변경에 맞춰 초기화)
-if 'step1_data' not in st.session_state: st.session_state['step1_data'] = {} 
-if 'step2_df' not in st.session_state: st.session_state['step2_df'] = None 
+if 'step1_df' not in st.session_state: st.session_state['step1_df'] = None 
+if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {} 
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
@@ -185,11 +183,14 @@ else:
 
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
-        if st.button("🔄 입력화면 초기화"):
+        
+        # ★ 여기가 새로 생긴 '강제 새로고침' 버튼입니다
+        if st.button("🔄 명단/데이터 강제 새로고침"):
+            st.cache_data.clear() # 캐시 삭제 (기억 지우기)
             st.session_state['step1_data'] = {}
             st.session_state['step2_df'] = None
-            st.session_state['current_step'] = 1
-            st.rerun()
+            st.rerun() # 앱 재시작
+            
         st.divider()
         if st.button("로그아웃"): st.session_state['logged_in'] = False; st.rerun()
 
@@ -197,7 +198,7 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (★ 스케줄러 방식 적용)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]: 
         st.subheader("활동 실적 등록")
@@ -221,47 +222,41 @@ else:
             st.rerun()
         st.divider()
 
-        # [STEP 1] 운영 현황 및 근무자 배정 (★ 여기가 핵심 변경)
+        # [STEP 1] 운영 현황 및 근무자 배정 (스케줄러)
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 통계 및 근무자 선택")
-            st.info("👋 **사용법:** 날짜별로 **근무한 해설사를 모두 선택**해주세요. 인원수는 자동으로 계산됩니다.")
+            st.info("👋 **사용법:** 날짜별로 **근무한 해설사를 모두 선택**해주세요.")
             
             _, last_day = calendar.monthrange(t_year, t_month)
             day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
             
             with st.form("roster_form"):
-                # 헤더
                 h1, h2, h3, h4, h5 = st.columns([1.2, 1, 1, 1, 3])
                 h1.markdown("**날짜 (요일)**")
                 h2.markdown("**방문자**")
                 h3.markdown("**청취자**")
                 h4.markdown("**해설횟수**")
-                h5.markdown("**✅ 근무 해설사 선택 (복수 선택 가능)**")
+                h5.markdown("**✅ 근무 해설사 선택 (명단에 없으면 사이드바 새로고침)**")
                 
-                # 데이터 보존을 위해 session state 사용
                 if not st.session_state['step1_data']:
                     for d in day_range:
                         d_str = datetime(t_year, t_month, d).strftime("%Y-%m-%d")
                         st.session_state['step1_data'][d_str] = {"v": 0, "l": 0, "c": 0, "guides": []}
 
-                # 날짜별 루프
                 for d in day_range:
                     d_obj = datetime(t_year, t_month, d)
                     d_str = d_obj.strftime("%Y-%m-%d")
-                    day_name = d_obj.strftime("%a") # 요일
+                    day_name = d_obj.strftime("%a")
                     
                     c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 1, 3])
-                    
                     c1.text(f"{d}일 ({day_name})")
                     
-                    # 값 입력
                     val = st.session_state['step1_data'][d_str]
-                    
                     new_v = c2.number_input(f"v_{d}", value=val["v"], min_value=0, label_visibility="collapsed", key=f"v_{d}")
                     new_l = c3.number_input(f"l_{d}", value=val["l"], min_value=0, label_visibility="collapsed", key=f"l_{d}")
                     new_c = c4.number_input(f"c_{d}", value=val["c"], min_value=0, label_visibility="collapsed", key=f"c_{d}")
                     
-                    # ★ 핵심: 멀티셀렉트 (체크박스보다 공간 효율적이고 빠름)
+                    # 멀티셀렉트
                     new_guides = c5.multiselect(
                         f"g_{d}", 
                         island_users, 
@@ -271,16 +266,13 @@ else:
                         placeholder="근무자 선택"
                     )
                     
-                    # 폼 제출 시 저장될 데이터 업데이트 (임시)
                     st.session_state['step1_data'][d_str] = {"v": new_v, "l": new_l, "c": new_c, "guides": new_guides}
                 
                 st.divider()
-                submitted1 = st.form_submit_button("💾 저장 및 다음 단계 (시간 입력)")
+                submitted1 = st.form_submit_button("💾 저장 및 다음 단계")
             
             if submitted1:
-                # 1. 통계 저장
                 stats_rows = []
-                # 2. 다음 단계를 위한 데이터 준비
                 step2_rows = []
                 
                 for d in day_range:
@@ -288,15 +280,10 @@ else:
                     data = st.session_state['step1_data'][d_str]
                     guides = data['guides']
                     
-                    # 통계 저장 (근무자가 있거나 실적이 있을 때)
                     if guides or data['v']>0 or data['l']>0 or data['c']>0:
-                        # 활동해설사수 = 선택한 사람 수
-                        g_count = len(guides)
                         stats_rows.append([d_str, sel_island, sel_place, "운영통계", 0, data['v'], data['l'], data['c'], str(datetime.now()), "검토대기"])
                     
-                    # 2단계 데이터 생성 (선택된 해설사만큼 행 생성)
                     for g_name in guides:
-                        # (날짜, 해설사, 활동시간기본값)
                         step2_rows.append([d_str, g_name, "8시간", 0, False])
 
                 if stats_rows: 
@@ -309,20 +296,19 @@ else:
                 else:
                     st.warning("선택된 근무자가 없습니다.")
 
-        # [STEP 2] 활동 시간 확인 (자동 생성됨)
+        # [STEP 2] 활동 시간 확인
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 근무 시간 확정")
             st.info("✅ 1단계에서 선택한 근무자 명단입니다. **활동 시간만 확인**하고 저장하세요.")
             
             with st.form("step2_form"):
-                # 데이터 에디터 (이름은 이미 들어가 있으니 수정 불가능하게 해도 되지만, 편의상 둠)
                 edited_df = st.data_editor(
                     st.session_state['step2_df'],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "일자": st.column_config.TextColumn("일자", disabled=True),
-                        "해설사": st.column_config.TextColumn("해설사", disabled=True), # 이름은 1단계에서 정했으니 고정
+                        "해설사": st.column_config.TextColumn("해설사", disabled=True),
                         "활동시간": st.column_config.SelectboxColumn("활동시간", options=["8시간", "4시간", "직접입력"], required=True),
                         "확인": st.column_config.CheckboxColumn("확인", default=False)
                     }
@@ -343,7 +329,7 @@ else:
                 if save_overwrite("운영일지", all_r): 
                     st.success("🎉 모든 데이터가 저장되었습니다!"); 
                     time.sleep(1.5)
-                    st.session_state['step1_data'] = {} # 초기화
+                    st.session_state['step1_data'] = {}
                     st.session_state['step2_df'] = None
                     st.session_state['current_step'] = 1
                     st.rerun()
