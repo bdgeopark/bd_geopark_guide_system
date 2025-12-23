@@ -9,10 +9,13 @@ import requests
 from urllib.parse import unquote
 
 # =========================================================
-# 🔽 [설정] D02(인천기점 대형선) 항로 고정
+# 🔽 [설정] 박사님의 키와 항로코드를 여기에 심었습니다!
 # =========================================================
-FIXED_API_KEY = ""  # 공공데이터포털 인증키 (Decoding Key)
-FIXED_ROUTE_CODE = "D02" # 관광객 입도의 핵심 항로
+# 아까 사진에서 추출한 키입니다. (따옴표 안에 고정)
+FIXED_API_KEY = "93baaca371aa86d8d732ad1435bc61fc5e78baec5bb0b98077bc6ee8046b7cac"
+
+# 박사님이 알려주신 인천 출발(입도) 핵심 항로
+FIXED_ROUTE_CODE = "D02" 
 # =========================================================
 
 
@@ -33,21 +36,20 @@ st.markdown("""
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
-# 데이터 저장소
+# 데이터 저장소 초기화 (에러 방지 안전장치)
 if 'step1_df' not in st.session_state: st.session_state['step1_df'] = None 
 if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {} 
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 
-# ★ [핵심 수정] 데이터 손상 시 자동 복구 기능 추가
+# 월별 입도객 데이터 초기화 (깨짐 방지)
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
-    # 데이터가 없거나, 이상하게 꼬여있으면(DataFrame이 아니면) 초기화
     rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
     st.session_state['monthly_arrivals'] = pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
 
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
 
-# API 설정 (고정값 우선)
+# API 설정 (고정값 자동 적용)
 if 'api_key' not in st.session_state: st.session_state['api_key'] = FIXED_API_KEY
 if 'route_code' not in st.session_state: st.session_state['route_code'] = FIXED_ROUTE_CODE
 
@@ -75,20 +77,53 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 기능 함수
+# 2. 기능 함수 (로그인 진단 기능 포함)
 # ---------------------------------------------------------
 def login(username, password):
-    if client is None: st.error("서버 연결 실패"); return
+    # 1. 서버 연결 확인
+    if client is None: 
+        st.error("❌ 서버 연결 실패: 'geopark_key.json' 파일이 같은 폴더에 있는지 확인하세요.")
+        return
+
     try:
-        sheet = client.open(SPREADSHEET_NAME).worksheet("사용자")
+        # 2. 엑셀 파일 열기
+        doc = client.open(SPREADSHEET_NAME)
+    except Exception as e:
+        st.error(f"❌ 파일 오류: 구글 드라이브에 '{SPREADSHEET_NAME}' 라는 이름의 파일이 없습니다.\n(에러: {e})")
+        return
+
+    try:
+        # 3. 사용자 시트 열기
+        sheet = doc.worksheet("사용자")
+    except Exception as e:
+        st.error(f"❌ 시트 오류: 파일 안에 '사용자'라는 이름의 탭(시트)이 없습니다.\n(에러: {e})")
+        return
+
+    try:
+        # 4. 아이디/비번 확인
         users = sheet.get_all_records()
+        # 데이터가 비어있는지 확인
+        if not users:
+            st.error("❌ 데이터 오류: '사용자' 시트에 내용이 하나도 없습니다.")
+            return
+
         for user in users:
-            if str(user['아이디']) == str(username) and str(user['비번']) == str(password):
+            # 공백 제거 후 비교
+            u_id = str(user.get('아이디', '')).strip()
+            u_pw = str(user.get('비번', '')).strip()
+            
+            if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
-                st.success(f"환영합니다, {user['이름']}님!"); time.sleep(0.5); st.rerun(); return
-        st.error("아이디 불일치")
-    except: st.error("로그인 오류")
+                st.success(f"환영합니다, {user['이름']}님!")
+                time.sleep(0.5)
+                st.rerun()
+                return
+        
+        st.error("🚫 아이디 또는 비밀번호가 틀렸습니다. (대소문자/공백 확인)")
+        
+    except Exception as e:
+        st.error(f"❌ 읽기 오류: '사용자' 시트의 첫 줄에 '아이디', '비번', '이름' 이라고 정확히 적혀있나요?\n(에러: {e})")
 
 @st.cache_data(ttl=3600)
 def get_users_by_island_cached(island_name):
@@ -98,6 +133,11 @@ def get_users_by_island_cached(island_name):
         users = sheet.get_all_records()
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
+
+# ★ 입력 즉시 저장 함수 (깜빡임 해결)
+def update_monthly_data():
+    edited_data = st.session_state["arrival_editor"]
+    st.session_state['monthly_arrivals'] = edited_data
 
 # 중복 방지 저장 함수
 def save_overwrite(sheet_name, new_rows):
@@ -312,11 +352,9 @@ else:
             st.header("📊 통합 운영 및 결항 분석")
             
             with st.expander("⚙️ [설정] API 키 & 대표 항로코드", expanded=True):
-                default_key = st.session_state['api_key'] if st.session_state['api_key'] else ""
-                api_key_input = st.text_input("API 인증키", value=default_key, type="password")
-                
-                default_route = st.session_state['route_code'] if st.session_state['route_code'] else ""
-                route_code_input = st.text_input("대표 항로코드 (예: D02)", value=default_route)
+                # ★ 자동으로 채워져서 나옵니다!
+                api_key_input = st.text_input("API 인증키", value=st.session_state['api_key'], type="password")
+                route_code_input = st.text_input("대표 항로코드", value=st.session_state['route_code'])
                 
                 if st.button("설정 저장"): 
                     st.session_state['api_key'] = api_key_input
@@ -328,14 +366,14 @@ else:
             
             with t_i1:
                 st.info("월별 입도객 수를 입력하세요.")
-                # ★ 여기가 핵심: 복잡한 로직 제거하고 '단순 대입'으로 변경
-                new_arrivals = st.data_editor(
+                # ★ 여기가 수정되었습니다: key와 on_change 추가로 입력 즉시 저장
+                st.data_editor(
                     st.session_state['monthly_arrivals'], 
                     hide_index=True, 
-                    use_container_width=True
+                    use_container_width=True,
+                    key="arrival_editor",
+                    on_change=update_monthly_data
                 )
-                # ★ 입력된 내용을 즉시 변수에 저장 (깜빡임 해결)
-                st.session_state['monthly_arrivals'] = new_arrivals
             
             with t_i2:
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
@@ -428,4 +466,3 @@ else:
                             pvt = cdf.groupby(['결항일차','장소'])['방문자'].mean().reset_index().pivot(index='결항일차',columns='장소',values='방문자').fillna(0)
                             st.line_chart(pvt)
                 except Exception as e: st.error(str(e))
-                    
