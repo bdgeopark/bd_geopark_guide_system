@@ -273,7 +273,6 @@ else:
                     st.session_state[track_key] = s_name
                 
                 # ★ Step 2: 직접 대입 방식 (깜빡임 X, 에러 X)
-                # 입력된 결과를 session_state 내의 dataframe에 바로 덮어씁니다.
                 st.session_state['step2_dfs'][k] = st.data_editor(
                     st.session_state['step2_dfs'][k], 
                     key=f"editor_step2_{k}", 
