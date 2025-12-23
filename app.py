@@ -11,7 +11,7 @@ from urllib.parse import unquote
 # =========================================================
 # 🔽 [설정] D02(인천기점 대형선) 항로 고정
 # =========================================================
-FIXED_API_KEY = ""  # 공공데이터포털 인증키(Decoding Key)
+FIXED_API_KEY = ""  # 공공데이터포털 인증키 (Decoding Key)
 FIXED_ROUTE_CODE = "D02" # 관광객 입도의 핵심 항로
 # =========================================================
 
@@ -39,10 +39,12 @@ if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {}
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 
-# 통계용
-if 'monthly_arrivals' not in st.session_state:
+# ★ [핵심 수정] 데이터 손상 시 자동 복구 기능 추가
+if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
+    # 데이터가 없거나, 이상하게 꼬여있으면(DataFrame이 아니면) 초기화
     rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
     st.session_state['monthly_arrivals'] = pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
+
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
 
 # API 설정 (고정값 우선)
@@ -96,12 +98,6 @@ def get_users_by_island_cached(island_name):
         users = sheet.get_all_records()
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
-
-# ★ [핵심] 입도객 입력 즉시 저장 함수 (깜빡임 해결)
-def update_monthly_data():
-    # editor_data_key에 임시 저장된 값을 실제 변수에 덮어씌움
-    edited_data = st.session_state["arrival_editor"]
-    st.session_state['monthly_arrivals'] = edited_data
 
 # 중복 방지 저장 함수
 def save_overwrite(sheet_name, new_rows):
@@ -309,7 +305,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계 (D02 집중 감시)
+    # 탭 5: 고급 통계 (D02 집중 감시 + 입력 버그 수정)
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -332,14 +328,14 @@ else:
             
             with t_i1:
                 st.info("월별 입도객 수를 입력하세요.")
-                # ★ 여기가 수정되었습니다: key와 on_change 추가로 입력 즉시 저장
-                st.data_editor(
+                # ★ 여기가 핵심: 복잡한 로직 제거하고 '단순 대입'으로 변경
+                new_arrivals = st.data_editor(
                     st.session_state['monthly_arrivals'], 
                     hide_index=True, 
-                    use_container_width=True,
-                    key="arrival_editor",
-                    on_change=update_monthly_data
+                    use_container_width=True
                 )
+                # ★ 입력된 내용을 즉시 변수에 저장 (깜빡임 해결)
+                st.session_state['monthly_arrivals'] = new_arrivals
             
             with t_i2:
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
@@ -432,3 +428,4 @@ else:
                             pvt = cdf.groupby(['결항일차','장소'])['방문자'].mean().reset_index().pivot(index='결항일차',columns='장소',values='방문자').fillna(0)
                             st.line_chart(pvt)
                 except Exception as e: st.error(str(e))
+                    
