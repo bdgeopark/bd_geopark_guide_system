@@ -245,12 +245,13 @@ else:
                     for k in range(1, max_guides+1):
                         data_k = []
                         for _, row in edited_step1.iterrows():
+                            # 기본값 설정: 활동시간="8시간"
                             if int(row["활동해설사수"]) >= k: data_k.append([row["일자"], row["요일"], None, "8시간", 0])
                         dfs[k] = pd.DataFrame(data_k, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)"])
                     st.session_state['step2_dfs'] = dfs; st.session_state['current_step'] = 2; st.rerun()
                 else: st.success("✅ 통계만 저장되었습니다."); time.sleep(1); st.session_state['step1_df']=None; st.rerun()
 
-        # [STEP 2] 해설사 활동 - ★ 드롭다운 복구 + 폼 적용
+        # [STEP 2] 해설사 활동 - ★ 드롭다운(컬럼설정) 복구
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
             st.info("👋 **사용법:** 먼저 위쪽에서 **해설사 이름을 선택**하세요. (자동으로 표에 들어갑니다). 그 다음 **표 안에 시간을 입력**하고 저장하세요.")
@@ -258,39 +259,39 @@ else:
             dfs = st.session_state['step2_dfs']
             
             # 1. 설정 영역 (드롭다운 - 폼 밖)
-            # 여기서 이름을 바꾸면 -> 세션 데이터가 바뀜 -> 아래 표가 갱신됨
             st.markdown("#### 🛠️ 근무자 배정 (이름 선택)")
             cols = st.columns(len(dfs))
             for i, k in enumerate(dfs):
                 with cols[i]:
-                    # 이전 선택값 기억
                     key_name = f"sel_guide_{k}"
                     if key_name not in st.session_state: st.session_state[key_name] = "선택안함"
-                    
                     selected = st.selectbox(f"{k}번 해설사", ["선택안함"] + island_users, key=key_name)
-                    
-                    # 값이 바뀌었으면 데이터프레임 업데이트 & 에디터 리셋
                     if selected != "선택안함":
-                        # 현재 DF에 이름 적용
                         st.session_state['step2_dfs'][k]['해설사'] = selected
-                        # ★ 중요: 에디터가 예전 데이터를 물고 있지 않게 강제 리셋
                         if f"ed_{k}" in st.session_state: del st.session_state[f"ed_{k}"]
 
             st.divider()
 
             # 2. 입력 영역 (표 - 폼 안)
-            # 여기서는 엔터를 쳐도 안전함
             with st.form("step2_form"):
                 st.markdown("#### 📝 활동 시간 입력")
                 edited_results = {}
                 
                 for k in range(1, len(dfs)+1):
                     st.caption(f"**{k}번 해설사 활동 내역**")
+                    # ★ 여기서 column_config를 사용해 드롭다운 부활!
                     edited_results[k] = st.data_editor(
                         st.session_state['step2_dfs'][k], 
                         key=f"ed_{k}", 
                         hide_index=True, 
-                        use_container_width=True
+                        use_container_width=True,
+                        column_config={
+                            "활동시간": st.column_config.SelectboxColumn(
+                                "활동시간",
+                                options=["8시간", "4시간", "직접입력"],
+                                required=True
+                            )
+                        }
                     )
                 
                 submitted2 = st.form_submit_button("✅ 모든 활동 일괄 저장")
@@ -299,13 +300,16 @@ else:
                 all_r = []
                 for k in edited_results:
                     tdf = edited_results[k]
-                    st.session_state['step2_dfs'][k] = tdf # 세션 동기화
+                    st.session_state['step2_dfs'][k] = tdf 
                     
                     for _, r in tdf.iterrows():
                         fh = 8
-                        if r["활동시간"]=="4시간": fh=4
-                        elif r["활동시간"]=="직접입력": fh=float(r["시간(직접)"] or 0)
-                        if fh==0: continue
+                        # 활동시간 로직 복구
+                        if r["활동시간"] == "8시간": fh = 8
+                        elif r["활동시간"] == "4시간": fh = 4
+                        elif r["활동시간"] == "직접입력": fh = float(r["시간(직접)"] or 0)
+                        
+                        if fh == 0: continue
                         all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, str(datetime.now()), "검토대기"])
                 
                 if save_overwrite("운영일지", all_r): st.success("저장 완료"); time.sleep(1); st.session_state['step1_df']=None; st.session_state['current_step']=1; st.rerun()
