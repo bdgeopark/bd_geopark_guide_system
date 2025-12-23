@@ -25,7 +25,6 @@ st.markdown("""
     html, body, [class*="css"] { font-size: 18px !important; }
     div[data-testid="stDataEditor"] table { font-size: 18px !important; }
     div[data-testid="stSelectbox"] * { font-size: 18px !important; }
-    /* 폼 테두리 강조 */
     div[data-testid="stForm"] { border: 2px solid #f0f2f6; padding: 20px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -193,7 +192,7 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (★ 여기가 폼으로 변경되었습니다)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]: 
         st.subheader("활동 실적 등록")
@@ -213,7 +212,7 @@ else:
             st.session_state['step1_df'] = None; st.session_state['step2_dfs'] = {}; st.session_state['current_step'] = 1; st.session_state['last_input_key'] = current_key; st.rerun()
         st.divider()
 
-        # [STEP 1] 운영 현황 - ★ 폼 적용 (깜빡임 해결)
+        # [STEP 1] 운영 현황 - 폼 적용
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 현황 입력")
             if st.session_state['step1_df'] is None:
@@ -222,16 +221,14 @@ else:
                 rows = [[datetime(t_year, t_month, d).strftime("%Y-%m-%d"), datetime(t_year, t_month, d).strftime("%a"), 0, 0, 0, 0] for d in day_range]
                 st.session_state['step1_df'] = pd.DataFrame(rows, columns=["일자", "요일", "방문자", "청취자", "해설횟수", "활동해설사수"])
             
-            st.info("💡 팁: 이제 연속으로 엔터를 쳐도 사라지지 않습니다. 다 입력하고 **[저장 및 다음 단계]** 버튼을 눌러주세요.")
+            st.info("💡 **팁:** 표 안에서 엔터를 쳐도 사라지지 않습니다. 다 입력하고 아래 **[저장]** 버튼을 누르세요.")
             
-            # ★ 핵심: st.form으로 감싸서 입력 중 새로고침 차단
             with st.form("step1_form"):
                 edited_step1 = st.data_editor(st.session_state['step1_df'], hide_index=True, use_container_width=True)
                 submitted1 = st.form_submit_button("💾 저장 및 다음 단계")
             
             if submitted1:
-                st.session_state['step1_df'] = edited_step1 # 결과 저장
-                
+                st.session_state['step1_df'] = edited_step1 
                 stats_rows = []
                 max_guides = 0
                 for _, row in edited_step1.iterrows():
@@ -253,21 +250,44 @@ else:
                     st.session_state['step2_dfs'] = dfs; st.session_state['current_step'] = 2; st.rerun()
                 else: st.success("✅ 통계만 저장되었습니다."); time.sleep(1); st.session_state['step1_df']=None; st.rerun()
 
-        # [STEP 2] 해설사 활동 - ★ 폼 적용 (깜빡임 해결)
+        # [STEP 2] 해설사 활동 - ★ 드롭다운 복구 + 폼 적용
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
+            st.info("👋 **사용법:** 먼저 위쪽에서 **해설사 이름을 선택**하세요. (자동으로 표에 들어갑니다). 그 다음 **표 안에 시간을 입력**하고 저장하세요.")
             
+            dfs = st.session_state['step2_dfs']
+            
+            # 1. 설정 영역 (드롭다운 - 폼 밖)
+            # 여기서 이름을 바꾸면 -> 세션 데이터가 바뀜 -> 아래 표가 갱신됨
+            st.markdown("#### 🛠️ 근무자 배정 (이름 선택)")
+            cols = st.columns(len(dfs))
+            for i, k in enumerate(dfs):
+                with cols[i]:
+                    # 이전 선택값 기억
+                    key_name = f"sel_guide_{k}"
+                    if key_name not in st.session_state: st.session_state[key_name] = "선택안함"
+                    
+                    selected = st.selectbox(f"{k}번 해설사", ["선택안함"] + island_users, key=key_name)
+                    
+                    # 값이 바뀌었으면 데이터프레임 업데이트 & 에디터 리셋
+                    if selected != "선택안함":
+                        # 현재 DF에 이름 적용
+                        st.session_state['step2_dfs'][k]['해설사'] = selected
+                        # ★ 중요: 에디터가 예전 데이터를 물고 있지 않게 강제 리셋
+                        if f"ed_{k}" in st.session_state: del st.session_state[f"ed_{k}"]
+
+            st.divider()
+
+            # 2. 입력 영역 (표 - 폼 안)
+            # 여기서는 엔터를 쳐도 안전함
             with st.form("step2_form"):
-                dfs = st.session_state['step2_dfs']
+                st.markdown("#### 📝 활동 시간 입력")
                 edited_results = {}
                 
                 for k in range(1, len(dfs)+1):
-                    st.markdown(f"#### 👤 **{k}번 해설사**")
-                    # 일괄 선택 기능은 폼 안에서 작동이 어려워 제거하고, 개별 선택으로 유도
-                    # (폼 안에서는 상호작용이 불가능하므로, 그냥 표에서 직접 입력하게 하는 게 가장 안전함)
-                    
+                    st.caption(f"**{k}번 해설사 활동 내역**")
                     edited_results[k] = st.data_editor(
-                        dfs[k], 
+                        st.session_state['step2_dfs'][k], 
                         key=f"ed_{k}", 
                         hide_index=True, 
                         use_container_width=True
@@ -279,8 +299,7 @@ else:
                 all_r = []
                 for k in edited_results:
                     tdf = edited_results[k]
-                    # 세션에도 업데이트 (뒤로가기 대비)
-                    st.session_state['step2_dfs'][k] = tdf
+                    st.session_state['step2_dfs'][k] = tdf # 세션 동기화
                     
                     for _, r in tdf.iterrows():
                         fh = 8
@@ -330,7 +349,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계 (★ 여기도 폼 적용)
+    # 탭 5: 고급 통계 - 폼 적용
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -348,23 +367,15 @@ else:
             t_i1, t_i2 = st.tabs(["월별 입도객", "결항일 관리"])
             
             with t_i1:
-                st.info("월별 입도객 수를 입력하세요. (연속 입력 가능)")
-                
-                # ★ 폼 적용: 여기서 엔터 쳐도 새로고침 안 됨
+                st.info("월별 입도객 수를 입력하세요.")
                 with st.form("arrivals_form"):
-                    new_arrivals = st.data_editor(
-                        st.session_state['monthly_arrivals'], 
-                        hide_index=True, 
-                        use_container_width=True
-                    )
+                    new_arrivals = st.data_editor(st.session_state['monthly_arrivals'], hide_index=True, use_container_width=True)
                     saved = st.form_submit_button("💾 입도객 데이터 서버에 저장하기")
                 
                 if saved:
                     st.session_state['monthly_arrivals'] = new_arrivals
-                    if save_monthly_data_to_sheet(new_arrivals):
-                        st.success("✅ 구글 시트('입도객현황')에 안전하게 저장되었습니다.")
-                    else:
-                        st.error("❌ 저장 실패. 시트 이름을 확인하세요.")
+                    if save_monthly_data_to_sheet(new_arrivals): st.success("✅ 저장 완료")
+                    else: st.error("❌ 저장 실패")
             
             with t_i2:
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
