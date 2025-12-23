@@ -97,6 +97,12 @@ def get_users_by_island_cached(island_name):
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
 
+# ★ [핵심] 입도객 입력 즉시 저장 함수 (깜빡임 해결)
+def update_monthly_data():
+    # editor_data_key에 임시 저장된 값을 실제 변수에 덮어씌움
+    edited_data = st.session_state["arrival_editor"]
+    st.session_state['monthly_arrivals'] = edited_data
+
 # 중복 방지 저장 함수
 def save_overwrite(sheet_name, new_rows):
     try:
@@ -109,7 +115,6 @@ def save_overwrite(sheet_name, new_rows):
         old_df = pd.DataFrame(existing_data)
         new_df = pd.DataFrame(new_rows, columns=['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '타임스탬프', '상태'])
         
-        # 키 생성 (날짜_장소_이름)
         old_df['unique_key'] = old_df['날짜'].astype(str) + "_" + old_df['장소'] + "_" + old_df['이름']
         new_df['unique_key'] = new_df['날짜'].astype(str) + "_" + new_df['장소'] + "_" + new_df['이름']
         
@@ -327,7 +332,14 @@ else:
             
             with t_i1:
                 st.info("월별 입도객 수를 입력하세요.")
-                st.session_state['monthly_arrivals'] = st.data_editor(st.session_state['monthly_arrivals'], hide_index=True, use_container_width=True)
+                # ★ 여기가 수정되었습니다: key와 on_change 추가로 입력 즉시 저장
+                st.data_editor(
+                    st.session_state['monthly_arrivals'], 
+                    hide_index=True, 
+                    use_container_width=True,
+                    key="arrival_editor",
+                    on_change=update_monthly_data
+                )
             
             with t_i2:
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
@@ -358,7 +370,6 @@ else:
                                                 is_full_cancel = (int(item.get('nvg_nocs', 1)) == 0)
                                                 
                                                 # 2. 부분 결항 (계획 > 실제)
-                                                # 예: 하모니+프라이드 2대 계획인데 1대만 뜸 -> 관광객 유입 감소
                                                 plan_ships = int(item.get('plan_nvg_vsl_cnt', 0))
                                                 real_ships = int(item.get('nvg_vsl_cnt', 0))
                                                 is_partial_cancel = (plan_ships > real_ships)
