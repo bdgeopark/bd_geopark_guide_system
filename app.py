@@ -107,7 +107,7 @@ def approve_rows(indices):
 # API 호출
 def fetch_komsa_data(api_key, target_date):
     url = "http://apis.data.go.kr/1514230/KeoStatInfoService/getWfrNvgStatInfo"
-    decoded_key = unquote(api_key) # 자동 키 변환
+    decoded_key = unquote(api_key) 
     params = {
         "serviceKey": decoded_key,
         "pageNo": "1",
@@ -196,12 +196,13 @@ else:
                     for k in range(1, max_guides+1):
                         data_k = []
                         for _, row in edited_step1.iterrows():
+                            # 활동시간 기본값 8시간, 시간(직접) 0으로 초기화
                             if int(row["활동해설사수"]) >= k: data_k.append([row["일자"], row["요일"], None, "8시간", 0])
                         dfs[k] = pd.DataFrame(data_k, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)"])
                     st.session_state['step2_dfs'] = dfs; st.session_state['current_step'] = 2; st.rerun()
                 else: st.success("✅ 통계만 저장됨"); time.sleep(1); st.session_state['step1_df']=None; st.rerun()
 
-        # [STEP 2] 해설사 활동 (★ 수정된 버그 없는 버전)
+        # [STEP 2] 해설사 활동
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
             dfs = st.session_state['step2_dfs']
@@ -209,7 +210,6 @@ else:
             for k in range(1, len(dfs)+1):
                 st.markdown(f"#### 👤 **{k}번 해설사**")
                 
-                # [버그수정] 변경 감지용 세션 키 생성
                 track_key = f"last_sel_{k}"
                 if track_key not in st.session_state: st.session_state[track_key] = "선택안함"
                 
@@ -219,13 +219,10 @@ else:
                     key=f"sel_{k}"
                 )
                 
-                # [버그수정] 셀렉트박스를 '건드렸을 때만' 표에 적용
                 if s_name != st.session_state[track_key]:
-                    if s_name != "선택안함":
-                        dfs[k]["해설사"] = s_name # 일괄 적용
-                    st.session_state[track_key] = s_name # 현재 값 기억
+                    if s_name != "선택안함": dfs[k]["해설사"] = s_name
+                    st.session_state[track_key] = s_name
                 
-                # 데이터 에디터 (여기서 수정하면 dfs[k]가 아닌 세션 내 데이터가 업데이트됨)
                 st.session_state['step2_dfs'][k] = st.data_editor(
                     dfs[k], 
                     key=f"ed_{k}", 
@@ -240,11 +237,28 @@ else:
                     for k in dfs:
                         tdf = st.session_state['step2_dfs'][k]
                         for _, r in tdf.iterrows():
-                            fh = 8
-                            if r["활동시간"]=="4시간": fh=4
-                            elif r["활동시간"]=="직접입력": fh=r["시간(직접)"]
-                            if r["활동시간"]=="직접입력" and fh==0: continue
-                            all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, str(datetime.now()), "검토대기"])
+                            # ★ 핵심 수정: 직접 입력값 처리 로직 강화
+                            final_hours = 0
+                            
+                            # 1. '시간(직접)' 칸의 값을 숫자로 안전하게 변환
+                            try:
+                                direct_val = float(r["시간(직접)"])
+                            except:
+                                direct_val = 0
+                            
+                            # 2. 선택에 따른 시간 할당
+                            if r["활동시간"] == "8시간":
+                                final_hours = 8
+                            elif r["활동시간"] == "4시간":
+                                final_hours = 4
+                            elif r["활동시간"] == "직접입력":
+                                final_hours = direct_val # 직접 입력값 사용
+                            
+                            # 3. 시간이 0이면 저장 안 함
+                            if final_hours == 0: continue
+                            
+                            all_r.append([r["일자"], sel_island, sel_place, r["해설사"], final_hours, 0, 0, 0, str(datetime.now()), "검토대기"])
+                            
                     if save_bulk("운영일지", all_r): st.success("저장 완료"); time.sleep(1); st.session_state['step1_df']=None; st.session_state['current_step']=1; st.rerun()
             with c_b2:
                 if st.button("🔙 뒤로가기"): st.session_state['current_step']=1; st.rerun()
@@ -328,13 +342,12 @@ else:
                                     s.update(label=f"{d_s} 조회...")
                                     res = fetch_komsa_data(st.session_state['api_key'], d_s)
                                     if res:
-                                        # 백령, 대청, 소청 중 하나라도 코드가 있고 운항이 0이면 결항 처리
                                         codes = list(st.session_state['route_codes'].values())
                                         for item in res:
                                             if item.get('seawy_cd') in codes:
                                                 if int(item.get('nvg_nocs', 1)) == 0:
                                                     f_dates.append(d_s)
-                                                    break # 하나라도 결항이면 추가하고 다음 날짜로
+                                                    break
                                     time.sleep(0.1)
                                 s.update(label="완료!", state="complete", expanded=False)
                             
