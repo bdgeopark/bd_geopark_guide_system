@@ -91,6 +91,7 @@ def save_monthly_data_to_sheet(df):
         st.error(f"저장 실패: '입도객현황' 시트가 있는지 확인해주세요. ({e})")
         return False
 
+# ★ [안전장치] 데이터 초기화 (에러 방지)
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
 
@@ -111,6 +112,7 @@ def login(username, password):
             if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
+                # 로그인 시 데이터 로드 및 초기화
                 st.session_state['monthly_arrivals'] = load_monthly_data()
                 st.success(f"환영합니다, {user['이름']}님!")
                 time.sleep(0.5); st.rerun(); return
@@ -125,17 +127,6 @@ def get_users_by_island_cached(island_name):
         users = sheet.get_all_records()
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
-
-# ★ [입력 깜빡임 해결 1] 입도객용 콜백
-def update_monthly_data_callback():
-    st.session_state['monthly_arrivals'] = st.session_state["arrival_editor"]
-
-# ★ [입력 깜빡임 해결 2] 활동내역(Step 2)용 콜백 (핵심 추가!)
-def update_step2_data(k):
-    # k번 해설사의 에디터 키(ed_1, ed_2...)에서 데이터를 가져와서 원본(step2_dfs)에 즉시 저장
-    editor_key = f"ed_{k}"
-    if editor_key in st.session_state:
-        st.session_state['step2_dfs'][k] = st.session_state[editor_key]
 
 def save_overwrite(sheet_name, new_rows):
     try:
@@ -209,7 +200,7 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력 (★ 여기가 수정되었습니다)
+    # 탭 1: 활동 입력
     # -----------------------------------------------------
     with tabs[0]: 
         st.subheader("활동 실적 등록")
@@ -237,16 +228,18 @@ else:
                 rows = [[datetime(t_year, t_month, d).strftime("%Y-%m-%d"), datetime(t_year, t_month, d).strftime("%a"), 0, 0, 0, 0] for d in day_range]
                 st.session_state['step1_df'] = pd.DataFrame(rows, columns=["일자", "요일", "방문자", "청취자", "해설횟수", "활동해설사수"])
             
-            # Step 1 에디터
-            edited_step1 = st.data_editor(st.session_state['step1_df'], hide_index=True, use_container_width=True)
+            # ★ Step 1: 직접 대입 방식 (깜빡임 X, 에러 X)
+            st.session_state['step1_df'] = st.data_editor(
+                st.session_state['step1_df'], 
+                hide_index=True, 
+                use_container_width=True,
+                key="editor_step1"
+            )
             
             if st.button("💾 저장 및 다음 단계"):
-                # (1) 에디터의 최신 값을 세션 스테이트에 저장 (엔터 안 쳐도 반영되게)
-                st.session_state['step1_df'] = edited_step1 
-                
                 stats_rows = []
                 max_guides = 0
-                for _, row in st.session_state['step1_df'].iterrows(): # 여기서 edited_step1 대신 session_state 사용
+                for _, row in st.session_state['step1_df'].iterrows():
                     g_cnt = int(row["활동해설사수"])
                     if g_cnt > max_guides: max_guides = g_cnt
                     if row["방문자"]>0 or row["청취자"]>0 or row["해설횟수"]>0:
@@ -279,14 +272,13 @@ else:
                     if s_name != "선택안함": st.session_state['step2_dfs'][k]["해설사"] = s_name
                     st.session_state[track_key] = s_name
                 
-                # ★ 여기가 핵심: on_change + args를 사용해 '입력 즉시 저장' 구현
-                st.data_editor(
+                # ★ Step 2: 직접 대입 방식 (깜빡임 X, 에러 X)
+                # 입력된 결과를 session_state 내의 dataframe에 바로 덮어씁니다.
+                st.session_state['step2_dfs'][k] = st.data_editor(
                     st.session_state['step2_dfs'][k], 
-                    key=f"ed_{k}", 
+                    key=f"editor_step2_{k}", 
                     hide_index=True, 
-                    use_container_width=True,
-                    on_change=update_step2_data, # 변경 감지 시 실행할 함수
-                    args=(k,)                    # 함수에 넘겨줄 인자 (몇 번 해설사인지)
+                    use_container_width=True
                 )
 
             if st.button("✅ 일괄 저장"):
@@ -355,16 +347,16 @@ else:
             
             with t_i1:
                 st.info("월별 입도객 수를 입력하세요. (입력 후 아래 저장 버튼 필수!)")
-                new_arrivals = st.data_editor(
+                # ★ 통계: 직접 대입 방식 (깜빡임 X, 에러 X)
+                st.session_state['monthly_arrivals'] = st.data_editor(
                     st.session_state['monthly_arrivals'], 
                     hide_index=True, 
                     use_container_width=True,
-                    key="arrival_editor",
-                    on_change=update_monthly_data_callback # 여기도 콜백 적용됨
+                    key="editor_monthly_arrivals"
                 )
                 
                 if st.button("💾 입도객 데이터 서버에 저장하기"):
-                    if save_monthly_data_to_sheet(new_arrivals):
+                    if save_monthly_data_to_sheet(st.session_state['monthly_arrivals']):
                         st.success("✅ 구글 시트('입도객현황')에 안전하게 저장되었습니다.")
                     else:
                         st.error("❌ 저장 실패. 시트 이름을 확인하세요.")
