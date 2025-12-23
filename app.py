@@ -25,6 +25,8 @@ st.markdown("""
     html, body, [class*="css"] { font-size: 18px !important; }
     div[data-testid="stDataEditor"] table { font-size: 18px !important; }
     div[data-testid="stSelectbox"] * { font-size: 18px !important; }
+    /* 폼 테두리 강조 */
+    div[data-testid="stForm"] { border: 2px solid #f0f2f6; padding: 20px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -67,19 +69,13 @@ locations = {
 # ---------------------------------------------------------
 # 2. 기능 함수
 # ---------------------------------------------------------
-# ★ 입도객 데이터 불러오기 (시트에서)
 def load_monthly_data():
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("입도객현황")
         data = sheet.get_all_records()
-        if data:
-            return pd.DataFrame(data)
-        else:
-            rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
-            return pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
-    except:
-        rows = [[f"{m}월", 0, 0, 0] for m in range(3, 13)]
-        return pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
+        if data: return pd.DataFrame(data)
+        else: return pd.DataFrame([[f"{m}월", 0, 0, 0] for m in range(3, 13)], columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
+    except: return pd.DataFrame([[f"{m}월", 0, 0, 0] for m in range(3, 13)], columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
 
 def save_monthly_data_to_sheet(df):
     try:
@@ -87,11 +83,9 @@ def save_monthly_data_to_sheet(df):
         sheet.clear()
         sheet.update([df.columns.values.tolist()] + df.values.tolist())
         return True
-    except Exception as e:
-        st.error(f"저장 실패: '입도객현황' 시트가 있는지 확인해주세요. ({e})")
-        return False
+    except: return False
 
-# ★ [안전장치] 데이터 초기화 (에러 방지)
+# 데이터 초기화
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
 
@@ -112,7 +106,6 @@ def login(username, password):
             if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
-                # 로그인 시 데이터 로드 및 초기화
                 st.session_state['monthly_arrivals'] = load_monthly_data()
                 st.success(f"환영합니다, {user['이름']}님!")
                 time.sleep(0.5); st.rerun(); return
@@ -200,7 +193,7 @@ else:
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
     # -----------------------------------------------------
-    # 탭 1: 활동 입력
+    # 탭 1: 활동 입력 (★ 여기가 폼으로 변경되었습니다)
     # -----------------------------------------------------
     with tabs[0]: 
         st.subheader("활동 실적 등록")
@@ -220,6 +213,7 @@ else:
             st.session_state['step1_df'] = None; st.session_state['step2_dfs'] = {}; st.session_state['current_step'] = 1; st.session_state['last_input_key'] = current_key; st.rerun()
         st.divider()
 
+        # [STEP 1] 운영 현황 - ★ 폼 적용 (깜빡임 해결)
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 현황 입력")
             if st.session_state['step1_df'] is None:
@@ -228,68 +222,73 @@ else:
                 rows = [[datetime(t_year, t_month, d).strftime("%Y-%m-%d"), datetime(t_year, t_month, d).strftime("%a"), 0, 0, 0, 0] for d in day_range]
                 st.session_state['step1_df'] = pd.DataFrame(rows, columns=["일자", "요일", "방문자", "청취자", "해설횟수", "활동해설사수"])
             
-            # ★ Step 1: 직접 대입 방식 (깜빡임 X, 에러 X)
-            st.session_state['step1_df'] = st.data_editor(
-                st.session_state['step1_df'], 
-                hide_index=True, 
-                use_container_width=True,
-                key="editor_step1"
-            )
+            st.info("💡 팁: 이제 연속으로 엔터를 쳐도 사라지지 않습니다. 다 입력하고 **[저장 및 다음 단계]** 버튼을 눌러주세요.")
             
-            if st.button("💾 저장 및 다음 단계"):
+            # ★ 핵심: st.form으로 감싸서 입력 중 새로고침 차단
+            with st.form("step1_form"):
+                edited_step1 = st.data_editor(st.session_state['step1_df'], hide_index=True, use_container_width=True)
+                submitted1 = st.form_submit_button("💾 저장 및 다음 단계")
+            
+            if submitted1:
+                st.session_state['step1_df'] = edited_step1 # 결과 저장
+                
                 stats_rows = []
                 max_guides = 0
-                for _, row in st.session_state['step1_df'].iterrows():
+                for _, row in edited_step1.iterrows():
                     g_cnt = int(row["활동해설사수"])
                     if g_cnt > max_guides: max_guides = g_cnt
                     if row["방문자"]>0 or row["청취자"]>0 or row["해설횟수"]>0:
                         stats_rows.append([row["일자"], sel_island, sel_place, "운영통계", 0, row["방문자"], row["청취자"], row["해설횟수"], str(datetime.now()), "검토대기"])
+                
                 if stats_rows: 
-                    if save_overwrite("운영일지", stats_rows): st.toast("✅ 저장 완료!")
+                    if save_overwrite("운영일지", stats_rows): st.toast("✅ 운영 통계 저장 완료!")
                 
                 if max_guides > 0:
                     dfs = {}
                     for k in range(1, max_guides+1):
                         data_k = []
-                        for _, row in st.session_state['step1_df'].iterrows():
+                        for _, row in edited_step1.iterrows():
                             if int(row["활동해설사수"]) >= k: data_k.append([row["일자"], row["요일"], None, "8시간", 0])
                         dfs[k] = pd.DataFrame(data_k, columns=["일자", "요일", "해설사", "활동시간", "시간(직접)"])
                     st.session_state['step2_dfs'] = dfs; st.session_state['current_step'] = 2; st.rerun()
-                else: st.success("✅ 저장됨"); time.sleep(1); st.session_state['step1_df']=None; st.rerun()
+                else: st.success("✅ 통계만 저장되었습니다."); time.sleep(1); st.session_state['step1_df']=None; st.rerun()
 
+        # [STEP 2] 해설사 활동 - ★ 폼 적용 (깜빡임 해결)
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 해설사 활동 상세 입력")
-            dfs = st.session_state['step2_dfs']
             
-            for k in range(1, len(dfs)+1):
-                st.markdown(f"#### 👤 **{k}번 해설사**")
+            with st.form("step2_form"):
+                dfs = st.session_state['step2_dfs']
+                edited_results = {}
                 
-                # 일괄 선택
-                track_key = f"last_sel_{k}"
-                if track_key not in st.session_state: st.session_state[track_key] = "선택안함"
-                s_name = st.selectbox(f"{k}번 이름 (일괄적용)", ["선택안함"]+island_users, key=f"sel_{k}")
-                if s_name != st.session_state[track_key]:
-                    if s_name != "선택안함": st.session_state['step2_dfs'][k]["해설사"] = s_name
-                    st.session_state[track_key] = s_name
+                for k in range(1, len(dfs)+1):
+                    st.markdown(f"#### 👤 **{k}번 해설사**")
+                    # 일괄 선택 기능은 폼 안에서 작동이 어려워 제거하고, 개별 선택으로 유도
+                    # (폼 안에서는 상호작용이 불가능하므로, 그냥 표에서 직접 입력하게 하는 게 가장 안전함)
+                    
+                    edited_results[k] = st.data_editor(
+                        dfs[k], 
+                        key=f"ed_{k}", 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
                 
-                # ★ Step 2: 직접 대입 방식 (깜빡임 X, 에러 X)
-                st.session_state['step2_dfs'][k] = st.data_editor(
-                    st.session_state['step2_dfs'][k], 
-                    key=f"editor_step2_{k}", 
-                    hide_index=True, 
-                    use_container_width=True
-                )
-
-            if st.button("✅ 일괄 저장"):
+                submitted2 = st.form_submit_button("✅ 모든 활동 일괄 저장")
+            
+            if submitted2:
                 all_r = []
-                for k in dfs:
-                    tdf = st.session_state['step2_dfs'][k]
+                for k in edited_results:
+                    tdf = edited_results[k]
+                    # 세션에도 업데이트 (뒤로가기 대비)
+                    st.session_state['step2_dfs'][k] = tdf
+                    
                     for _, r in tdf.iterrows():
                         fh = 8
                         if r["활동시간"]=="4시간": fh=4
                         elif r["활동시간"]=="직접입력": fh=float(r["시간(직접)"] or 0)
                         if fh==0: continue
                         all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, str(datetime.now()), "검토대기"])
+                
                 if save_overwrite("운영일지", all_r): st.success("저장 완료"); time.sleep(1); st.session_state['step1_df']=None; st.session_state['current_step']=1; st.rerun()
             
             if st.button("🔙 뒤로가기"): st.session_state['current_step']=1; st.rerun()
@@ -309,8 +308,12 @@ else:
         pl = st.selectbox("예정지", locations.get(user['섬'], ["-"]))
         _, ld = calendar.monthrange(py, pm)
         rng = range(1, 16) if "전반기" in pp else range(16, ld+1)
-        sels = st.multiselect("일자 선택", [f"{d}일" for d in rng])
-        if st.button("제출"):
+        
+        with st.form("plan_form"):
+            sels = st.multiselect("일자 선택", [f"{d}일" for d in rng])
+            plan_submit = st.form_submit_button("계획 제출")
+            
+        if plan_submit:
             rows = [[datetime(py, pm, int(s.replace("일",""))).strftime("%Y-%m-%d"), user['섬'], pl, my_name, "", str(datetime.now())] for s in sels]
             try: client.open(SPREADSHEET_NAME).worksheet("월간계획").append_rows(rows); st.success("완료")
             except: st.error("실패")
@@ -327,7 +330,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계
+    # 탭 5: 고급 통계 (★ 여기도 폼 적용)
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -345,17 +348,20 @@ else:
             t_i1, t_i2 = st.tabs(["월별 입도객", "결항일 관리"])
             
             with t_i1:
-                st.info("월별 입도객 수를 입력하세요. (입력 후 아래 저장 버튼 필수!)")
-                # ★ 통계: 직접 대입 방식 (깜빡임 X, 에러 X)
-                st.session_state['monthly_arrivals'] = st.data_editor(
-                    st.session_state['monthly_arrivals'], 
-                    hide_index=True, 
-                    use_container_width=True,
-                    key="editor_monthly_arrivals"
-                )
+                st.info("월별 입도객 수를 입력하세요. (연속 입력 가능)")
                 
-                if st.button("💾 입도객 데이터 서버에 저장하기"):
-                    if save_monthly_data_to_sheet(st.session_state['monthly_arrivals']):
+                # ★ 폼 적용: 여기서 엔터 쳐도 새로고침 안 됨
+                with st.form("arrivals_form"):
+                    new_arrivals = st.data_editor(
+                        st.session_state['monthly_arrivals'], 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
+                    saved = st.form_submit_button("💾 입도객 데이터 서버에 저장하기")
+                
+                if saved:
+                    st.session_state['monthly_arrivals'] = new_arrivals
+                    if save_monthly_data_to_sheet(new_arrivals):
                         st.success("✅ 구글 시트('입도객현황')에 안전하게 저장되었습니다.")
                     else:
                         st.error("❌ 저장 실패. 시트 이름을 확인하세요.")
