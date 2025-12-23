@@ -9,14 +9,10 @@ import requests
 from urllib.parse import unquote
 
 # =========================================================
-# 🔽 [설정] 여기만 한 번 고치시면 됩니다! (매번 입력 귀찮음 방지)
+# 🔽 [설정] D02(인천기점 대형선) 항로 고정
 # =========================================================
-# 1. 공공데이터포털 인증키 (Decoding Key)를 따옴표 안에 넣으세요.
-FIXED_API_KEY = "" 
-
-# 2. 대표 항로코드 (인천-백령 등 주력 노선 하나만!)
-# (예: J04-03 / 모르면 비워두고 앱 내에서 찾으셔도 됩니다)
-FIXED_ROUTE_CODE = "J04-03" 
+FIXED_API_KEY = ""  # 공공데이터포털 인증키(Decoding Key)
+FIXED_ROUTE_CODE = "D02" # 관광객 입도의 핵심 항로
 # =========================================================
 
 
@@ -49,7 +45,7 @@ if 'monthly_arrivals' not in st.session_state:
     st.session_state['monthly_arrivals'] = pd.DataFrame(rows, columns=["월", "백령_입도객", "대청_입도객", "소청_입도객"])
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
 
-# API 설정 (고정값 있으면 그거 씀)
+# API 설정 (고정값 우선)
 if 'api_key' not in st.session_state: st.session_state['api_key'] = FIXED_API_KEY
 if 'route_code' not in st.session_state: st.session_state['route_code'] = FIXED_ROUTE_CODE
 
@@ -77,7 +73,7 @@ locations = {
 }
 
 # ---------------------------------------------------------
-# 2. 기능 함수 (핵심 수정: 덮어쓰기 기능 추가)
+# 2. 기능 함수
 # ---------------------------------------------------------
 def login(username, password):
     if client is None: st.error("서버 연결 실패"); return
@@ -101,62 +97,36 @@ def get_users_by_island_cached(island_name):
         return [u['이름'] for u in users if u.get('섬') == island_name]
     except: return []
 
-# ★ [핵심] 중복 방지 저장 함수 (기존 데이터 삭제 후 저장)
-def save_overwrite(sheet_name, new_rows, key_cols=['날짜', '이름', '장소']):
-    """
-    구글 시트에서 데이터를 읽어와서, 
-    새로 입력하려는 데이터와 겹치는 날짜/장소/이름의 기존 행을 지우고
-    새 데이터를 추가합니다. (수정 효과)
-    """
+# 중복 방지 저장 함수
+def save_overwrite(sheet_name, new_rows):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         existing_data = sheet.get_all_records()
-        
-        # 1. 기존 데이터가 없으면 그냥 추가
         if not existing_data:
             sheet.append_rows(new_rows)
             return True
         
-        # 2. 데이터프레임으로 변환
         old_df = pd.DataFrame(existing_data)
-        
-        # 3. 삭제할 조건 만들기 (새 데이터에 있는 날짜&장소&이름은 기존꺼에서 뺌)
-        # 비교를 위해 new_rows를 DF로 만듦 (컬럼 순서 중요: 날짜, 섬, 장소, 이름...)
-        # 운영일지 컬럼: [날짜, 섬, 장소, 이름, 활동시간, 방문자, 청취자, 해설횟수, 타임스탬프, 상태]
         new_df = pd.DataFrame(new_rows, columns=['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '타임스탬프', '상태'])
         
-        # 날짜+장소+이름을 키로 잡아서 중복 확인 (키: '2025-03-01_두무진_홍길동')
-        # 주의: 1단계(통계)는 이름이 '운영통계'임.
-        
-        # 기존 데이터에 '키' 컬럼 생성
+        # 키 생성 (날짜_장소_이름)
         old_df['unique_key'] = old_df['날짜'].astype(str) + "_" + old_df['장소'] + "_" + old_df['이름']
         new_df['unique_key'] = new_df['날짜'].astype(str) + "_" + new_df['장소'] + "_" + new_df['이름']
         
-        # 새 데이터에 있는 키들은 기존 데이터에서 제외 (Drop)
         keys_to_remove = new_df['unique_key'].tolist()
         final_df = old_df[~old_df['unique_key'].isin(keys_to_remove)].copy()
-        
-        # 키 컬럼 삭제
         final_df = final_df.drop(columns=['unique_key'])
         
-        # 4. 기존(필터링됨) + 신규 합치기
-        # 컬럼 순서 맞추기 (gspread get_all_records는 순서가 섞일 수 있음, 중요!)
         cols_order = ['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '타임스탬프', '상태']
-        
-        # 기존 데이터에 없는 컬럼이 있을 수 있으므로 보정
         for c in cols_order:
             if c not in final_df.columns: final_df[c] = ""
-            
+        
         final_df = final_df[cols_order]
         new_df = new_df[cols_order]
-        
         combined_df = pd.concat([final_df, new_df], ignore_index=True)
         
-        # 5. 시트 클리어 하고 다시 쓰기 (이게 가장 확실함)
-        # 데이터가 수천 건 넘어가면 느릴 수 있지만, 연간 데이터로는 충분함.
         sheet.clear()
         sheet.update([combined_df.columns.values.tolist()] + combined_df.values.tolist())
-        
         return True
     except Exception as e:
         st.error(f"저장 중 오류: {e}")
@@ -213,10 +183,8 @@ else:
     st.title(f"📱 {my_name}님의 업무공간")
     tabs = st.tabs(["📝 활동 입력", "📅 내 활동 조회", "🗓️ 다음달 계획", "👀 조원 검토", "📊 통계"])
 
-    # -----------------------------------------------------
-    # 탭 1: 활동 입력
-    # -----------------------------------------------------
-    with tabs[0]:
+    # 탭 1~4 (기존과 동일)
+    with tabs[0]: # 활동 입력
         st.subheader("활동 실적 등록")
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1: t_year = st.number_input("년", value=datetime.now().year)
@@ -254,12 +222,9 @@ else:
                     if row["방문자"]>0 or row["청취자"]>0 or row["해설횟수"]>0:
                         stats_rows.append([row["일자"], sel_island, sel_place, "운영통계", 0, row["방문자"], row["청취자"], row["해설횟수"], str(datetime.now()), "검토대기"])
                 
-                # ★ save_overwrite 함수 사용 (중복제거)
                 if stats_rows: 
-                    if save_overwrite("운영일지", stats_rows):
-                        st.toast("✅ 운영 통계 저장(수정) 완료!")
-                    else:
-                        st.stop()
+                    if save_overwrite("운영일지", stats_rows): st.toast("✅ 운영 통계 저장(수정) 완료!")
+                    else: st.stop()
                 
                 if max_guides > 0:
                     dfs = {}
@@ -278,26 +243,13 @@ else:
             
             for k in range(1, len(dfs)+1):
                 st.markdown(f"#### 👤 **{k}번 해설사**")
-                
                 track_key = f"last_sel_{k}"
                 if track_key not in st.session_state: st.session_state[track_key] = "선택안함"
-                
-                s_name = st.selectbox(
-                    f"{k}번 해설사 이름 (일괄적용)", 
-                    ["선택안함"] + island_users, 
-                    key=f"sel_{k}"
-                )
-                
+                s_name = st.selectbox(f"{k}번 해설사 이름 (일괄적용)", ["선택안함"] + island_users, key=f"sel_{k}")
                 if s_name != st.session_state[track_key]:
                     if s_name != "선택안함": dfs[k]["해설사"] = s_name
                     st.session_state[track_key] = s_name
-                
-                st.session_state['step2_dfs'][k] = st.data_editor(
-                    dfs[k], 
-                    key=f"ed_{k}", 
-                    hide_index=True, 
-                    use_container_width=True
-                )
+                st.session_state['step2_dfs'][k] = st.data_editor(dfs[k], key=f"ed_{k}", hide_index=True, use_container_width=True)
             
             c_b1, c_b2 = st.columns(2)
             with c_b1:
@@ -309,21 +261,16 @@ else:
                             final_hours = 0
                             try: direct_val = float(r["시간(직접)"])
                             except: direct_val = 0
-                            
                             if r["활동시간"] == "8시간": final_hours = 8
                             elif r["활동시간"] == "4시간": final_hours = 4
                             elif r["활동시간"] == "직접입력": final_hours = direct_val
-                            
                             if final_hours == 0: continue
                             all_r.append([r["일자"], sel_island, sel_place, r["해설사"], final_hours, 0, 0, 0, str(datetime.now()), "검토대기"])
-                    
-                    # ★ save_overwrite 함수 사용 (중복제거)
                     if save_overwrite("운영일지", all_r):
                         st.success("저장 완료! (기존 데이터가 있다면 수정되었습니다)"); time.sleep(1); st.session_state['step1_df']=None; st.session_state['current_step']=1; st.rerun()
             with c_b2:
                 if st.button("🔙 뒤로가기"): st.session_state['current_step']=1; st.rerun()
 
-    # 탭 2~4 (기존 동일)
     with tabs[1]:
         if st.button("내역 조회"):
             try:
@@ -342,11 +289,7 @@ else:
         sels = st.multiselect("일자 선택", [f"{d}일" for d in rng])
         if st.button("제출"):
             rows = [[datetime(py, pm, int(s.replace("일",""))).strftime("%Y-%m-%d"), my_island, pl, my_name, "", str(datetime.now())] for s in sels]
-            # 계획은 수정 기능 없이 일단 Append (필요시 추가 가능)
-            try:
-                sheet = client.open(SPREADSHEET_NAME).worksheet("월간계획")
-                sheet.append_rows(rows)
-                st.success("완료")
+            try: sheet = client.open(SPREADSHEET_NAME).worksheet("월간계획"); sheet.append_rows(rows); st.success("완료")
             except: st.error("실패")
 
     if my_role in ["조장", "관리자"]:
@@ -361,41 +304,24 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계 (키/항로 고정 + 중복방지)
+    # 탭 5: 고급 통계 (D02 집중 감시)
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
             st.header("📊 통합 운영 및 결항 분석")
             
-            # [설정] 키가 맨 위에 정의되어 있으면 자동 입력됨
-            with st.expander("⚙️ [설정] 여객선 결항 API 및 항로코드", expanded=True):
-                # 키가 없는 경우 입력 받음
+            with st.expander("⚙️ [설정] API 키 & 대표 항로코드", expanded=True):
                 default_key = st.session_state['api_key'] if st.session_state['api_key'] else ""
                 api_key_input = st.text_input("API 인증키", value=default_key, type="password")
                 
-                # 항로코드: 하나만 입력
                 default_route = st.session_state['route_code'] if st.session_state['route_code'] else ""
-                route_code_input = st.text_input("대표 항로코드 (예: J04-03)", value=default_route)
+                route_code_input = st.text_input("대표 항로코드 (예: D02)", value=default_route)
                 
                 if st.button("설정 저장"): 
                     st.session_state['api_key'] = api_key_input
                     st.session_state['route_code'] = route_code_input
                     st.success("저장됨")
-                
-                # 수동 스캔 (확인용)
-                if st.button("🔍 오늘 날짜로 코드 테스트"):
-                    if not st.session_state['api_key']: st.error("키 필요")
-                    else:
-                        scan_res = fetch_komsa_data(st.session_state['api_key'], str(datetime.now().date()))
-                        if scan_res:
-                            # 보기 좋게
-                            temp_df = pd.DataFrame(scan_res)
-                            if 'seawy_cd' in temp_df.columns:
-                                st.dataframe(temp_df[['seawy_cd','plan_nvg_nocs','nvg_nocs']])
-                            else: st.write(scan_res)
-                        else: st.warning("데이터 없음")
 
-            # [섹션 1] 입력
             st.subheader("1. 📥 데이터 입력")
             t_i1, t_i2 = st.tabs(["월별 입도객", "결항일 관리"])
             
@@ -404,7 +330,7 @@ else:
                 st.session_state['monthly_arrivals'] = st.data_editor(st.session_state['monthly_arrivals'], hide_index=True, use_container_width=True)
             
             with t_i2:
-                st.info("대표 항로의 운항 횟수가 '0'이면 결항으로 간주합니다.")
+                st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
                 c_a1, c_a2 = st.columns([1, 2])
                 with c_a1: t_m = st.number_input("조회 월", 1, 12, datetime.now().month)
                 with c_a2:
@@ -426,28 +352,36 @@ else:
                                     res = fetch_komsa_data(st.session_state['api_key'], d_s)
                                     if res:
                                         for item in res:
-                                            # 대표 항로코드가 있고, 운항횟수가 0이면 결항
+                                            # D02 코드 일치 확인
                                             if item.get('seawy_cd') == target_code:
-                                                if int(item.get('nvg_nocs', 1)) == 0:
+                                                # 1. 전면 결항 (운항 0회)
+                                                is_full_cancel = (int(item.get('nvg_nocs', 1)) == 0)
+                                                
+                                                # 2. 부분 결항 (계획 > 실제)
+                                                # 예: 하모니+프라이드 2대 계획인데 1대만 뜸 -> 관광객 유입 감소
+                                                plan_ships = int(item.get('plan_nvg_vsl_cnt', 0))
+                                                real_ships = int(item.get('nvg_vsl_cnt', 0))
+                                                is_partial_cancel = (plan_ships > real_ships)
+                                                
+                                                if is_full_cancel or is_partial_cancel:
                                                     f_dates.append(d_s)
                                     time.sleep(0.1)
                                 s.update(label="완료!", state="complete", expanded=False)
                             
                             if f_dates:
-                                st.success(f"{len(f_dates)}일 찾음: {f_dates}")
+                                st.success(f"D02 항로 특이사항(결항) {len(f_dates)}일 발견: {f_dates}")
                                 cur = set(st.session_state['cancellation_dates'])
                                 cur.update(f_dates)
                                 st.session_state['cancellation_dates'] = sorted(list(cur))
-                            else: st.info("결항 없음")
+                            else: st.info("D02 항로 정상 운항")
                 
-                st.write("📋 **등록된 결항일**")
+                st.write("📋 **관리 대상 날짜 (결항/부분결항)**")
                 if st.session_state['cancellation_dates']:
                     rd = st.multiselect("삭제할 날짜", st.session_state['cancellation_dates'])
                     if st.button("선택 삭제"):
                         for d in rd: st.session_state['cancellation_dates'].remove(d)
                         st.rerun()
 
-            # [섹션 2] 분석
             if st.button("📈 분석 결과 보기", type="primary"):
                 try:
                     df = pd.DataFrame(client.open(SPREADSHEET_NAME).worksheet("운영일지").get_all_records())
@@ -469,7 +403,7 @@ else:
                             st.write(f"**🏝️ {isl}**")
                             st.line_chart(mged.set_index('월_숫자')[['방문자','방문율(%)']])
 
-                    st.subheader("2. 🚢 결항 시 행동 분석")
+                    st.subheader("2. 🚢 결항(D02 중단) 시 행동 분석")
                     if not st.session_state['cancellation_dates']: st.info("결항일 없음")
                     else:
                         cds = sorted([pd.to_datetime(d) for d in st.session_state['cancellation_dates']])
@@ -482,7 +416,7 @@ else:
                             prev=d
                         df['결항일차'] = df['날짜'].map(cmap).fillna(0)
                         cdf = df[df['결항일차']>0]
-                        if cdf.empty: st.warning("데이터 없음")
+                        if cdf.empty: st.warning("해당 날짜의 운영 데이터가 없습니다.")
                         else:
                             pvt = cdf.groupby(['결항일차','장소'])['방문자'].mean().reset_index().pivot(index='결항일차',columns='장소',values='방문자').fillna(0)
                             st.line_chart(pvt)
