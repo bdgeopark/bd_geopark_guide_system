@@ -39,10 +39,7 @@ if 'step2_df' not in st.session_state: st.session_state['step2_df'] = None
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
-
-# ★ 비고(이벤트) 범례 초기값 (수정됨: 학생견학/체험활동 통합)
-if 'event_categories' not in st.session_state:
-    st.session_state['event_categories'] = ["학생견학/체험활동", "외부단체", "상괭이 사체", "물범 사체", "지뢰 발견"]
+# 범례는 이제 시트에서 불러오므로 초기화 불필요 (로드 함수에서 처리)
 
 # API 설정
 if 'api_key' not in st.session_state: st.session_state['api_key'] = FIXED_API_KEY
@@ -74,6 +71,40 @@ locations = {
 # ---------------------------------------------------------
 # 2. 기능 함수
 # ---------------------------------------------------------
+# ★ [핵심] 범례(카테고리) 불러오기 및 시트 자동생성
+def load_event_categories():
+    default_cats = ["학생견학/체험활동", "외부단체", "상괭이 사체", "물범 사체", "지뢰 발견"]
+    if client is None: return default_cats
+    
+    try:
+        doc = client.open(SPREADSHEET_NAME)
+        try:
+            sheet = doc.worksheet("설정")
+        except:
+            # 시트가 없으면 자동 생성
+            sheet = doc.add_worksheet(title="설정", rows=100, cols=2)
+            # 기본값 쓰기 (세로로)
+            sheet.update(range_name='A1:A'+str(len(default_cats)), values=[[c] for c in default_cats])
+            return default_cats
+        
+        # 시트가 있으면 읽어오기
+        vals = sheet.col_values(1) # A열 읽기
+        if not vals: # 비어있으면 기본값 채우기
+            sheet.update(range_name='A1:A'+str(len(default_cats)), values=[[c] for c in default_cats])
+            return default_cats
+        
+        return vals
+    except:
+        return default_cats
+
+# ★ [핵심] 새 범례 추가하기 (영구 저장)
+def add_new_category_to_sheet(new_cat):
+    try:
+        sheet = client.open(SPREADSHEET_NAME).worksheet("설정")
+        sheet.append_row([new_cat]) # 맨 아래 추가
+        return True
+    except: return False
+
 def load_monthly_data():
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("입도객현황")
@@ -90,8 +121,13 @@ def save_monthly_data_to_sheet(df):
         return True
     except: return False
 
+# 초기 데이터 로드
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
+
+# ★ 앱 시작 시 범례 로드 (없으면 세션에 저장)
+if 'event_categories' not in st.session_state:
+    st.session_state['event_categories'] = load_event_categories()
 
 def login(username, password):
     if client is None: st.error("❌ 서버 연결 실패"); return
@@ -108,7 +144,9 @@ def login(username, password):
             if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
+                # 로그인 성공 시 데이터들 최신화
                 st.session_state['monthly_arrivals'] = load_monthly_data()
+                st.session_state['event_categories'] = load_event_categories()
                 st.success(f"환영합니다, {user['이름']}님!")
                 time.sleep(0.5); st.rerun(); return
         st.error("🚫 아이디/비번 불일치")
@@ -191,6 +229,7 @@ else:
             st.cache_data.clear()
             st.session_state['step1_data'] = {}
             st.session_state['step2_df'] = None
+            st.session_state['event_categories'] = load_event_categories() # 범례도 새로고침
             st.rerun()
         st.divider()
         if st.button("로그아웃"): st.session_state['logged_in'] = False; st.rerun()
@@ -225,14 +264,21 @@ else:
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 통계 및 근무자 선택")
             
-            with st.expander("➕ 비고(특이사항) 범례 추가하기", expanded=False):
+            # ★ 범례 영구 추가 기능
+            with st.expander("➕ 비고(특이사항) 범례 관리", expanded=False):
+                st.caption("새로운 항목을 입력하고 추가하면, 구글 시트('설정')에 저장되어 계속 사용할 수 있습니다.")
                 c_add1, c_add2 = st.columns([3, 1])
-                new_cat = c_add1.text_input("새로운 범례 입력 (예: 태풍피해, VIP방문)", label_visibility="collapsed")
-                if c_add2.button("추가"):
+                new_cat = c_add1.text_input("새로운 항목 입력", placeholder="예: 태풍 피해, VIP 방문 등", label_visibility="collapsed")
+                if c_add2.button("영구 추가"):
                     if new_cat and new_cat not in st.session_state['event_categories']:
-                        st.session_state['event_categories'].append(new_cat)
-                        st.success(f"'{new_cat}' 추가됨!")
-                        st.rerun()
+                        # 시트에 저장 시도
+                        if add_new_category_to_sheet(new_cat):
+                            st.session_state['event_categories'].append(new_cat)
+                            st.success(f"✅ '{new_cat}' 저장 완료!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("저장 실패 (네트워크 오류)")
 
             _, last_day = calendar.monthrange(t_year, t_month)
             day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
@@ -265,6 +311,7 @@ else:
                     new_c = c4.number_input(f"c_{d}", value=val["c"], min_value=0, label_visibility="collapsed", key=f"c_{d}")
                     
                     new_guides = c5.multiselect(f"g_{d}", island_users, default=val["guides"], label_visibility="collapsed", key=f"g_{d}", placeholder="근무자")
+                    
                     new_events = c6.multiselect(
                         f"e_{d}", 
                         st.session_state['event_categories'], 
