@@ -7,6 +7,7 @@ import time
 import calendar
 import requests
 from urllib.parse import unquote
+from collections import Counter
 
 # =========================================================
 # 🔽 [설정] 고정값 (API키 & 항로코드)
@@ -25,6 +26,7 @@ st.markdown("""
     html, body, [class*="css"] { font-size: 18px !important; }
     div[data-testid="stDataEditor"] table { font-size: 18px !important; }
     div[data-testid="stSelectbox"] * { font-size: 18px !important; }
+    div[data-testid="stMultiSelect"] * { font-size: 18px !important; }
     div[data-testid="stForm"] { border: 2px solid #f0f2f6; padding: 20px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -32,11 +34,15 @@ st.markdown("""
 # 세션 초기화
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-if 'step1_df' not in st.session_state: st.session_state['step1_df'] = None 
-if 'step2_dfs' not in st.session_state: st.session_state['step2_dfs'] = {} 
+if 'step1_data' not in st.session_state: st.session_state['step1_data'] = {} 
+if 'step2_df' not in st.session_state: st.session_state['step2_df'] = None 
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
+
+# ★ 비고(이벤트) 범례 초기값 (수정됨: 학생견학/체험활동 통합)
+if 'event_categories' not in st.session_state:
+    st.session_state['event_categories'] = ["학생견학/체험활동", "외부단체", "상괭이 사체", "물범 사체", "지뢰 발견"]
 
 # API 설정
 if 'api_key' not in st.session_state: st.session_state['api_key'] = FIXED_API_KEY
@@ -84,7 +90,6 @@ def save_monthly_data_to_sheet(df):
         return True
     except: return False
 
-# 데이터 초기화
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
 
@@ -92,10 +97,8 @@ def login(username, password):
     if client is None: st.error("❌ 서버 연결 실패"); return
     try: doc = client.open(SPREADSHEET_NAME)
     except: st.error(f"❌ '{SPREADSHEET_NAME}' 파일을 찾을 수 없습니다."); return
-
     try: sheet = doc.worksheet("사용자")
     except: st.error("❌ '사용자' 시트가 없습니다."); return
-
     try:
         users = sheet.get_all_records()
         if not users: st.error("❌ 사용자 데이터가 없습니다."); return
@@ -126,8 +129,10 @@ def save_overwrite(sheet_name, new_rows):
         existing_data = sheet.get_all_records()
         if not existing_data: sheet.append_rows(new_rows); return True
         
+        cols_order = ['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '비고', '타임스탬프', '상태']
+        
         old_df = pd.DataFrame(existing_data)
-        new_df = pd.DataFrame(new_rows, columns=['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '타임스탬프', '상태'])
+        new_df = pd.DataFrame(new_rows, columns=cols_order) 
         
         old_df['unique_key'] = old_df['날짜'].astype(str) + "_" + old_df['장소'] + "_" + old_df['이름']
         new_df['unique_key'] = new_df['날짜'].astype(str) + "_" + new_df['장소'] + "_" + new_df['이름']
@@ -136,7 +141,6 @@ def save_overwrite(sheet_name, new_rows):
         final_df = old_df[~old_df['unique_key'].isin(keys_to_remove)].copy()
         final_df = final_df.drop(columns=['unique_key'])
         
-        cols_order = ['날짜', '섬', '장소', '이름', '활동시간', '방문자', '청취자', '해설횟수', '타임스탬프', '상태']
         for c in cols_order:
             if c not in final_df.columns: final_df[c] = ""
         
@@ -152,7 +156,7 @@ def save_overwrite(sheet_name, new_rows):
 def approve_rows(indices):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
-        for idx in indices: sheet.update_cell(idx + 2, 10, "승인완료")
+        for idx in indices: sheet.update_cell(idx + 2, 11, "승인완료")
         return True
     except: return False
 
@@ -183,14 +187,11 @@ else:
 
     with st.sidebar:
         st.info(f"👤 **{my_name}** ({my_role})")
-        
-        # ★ 여기가 새로 생긴 '강제 새로고침' 버튼입니다
         if st.button("🔄 명단/데이터 강제 새로고침"):
-            st.cache_data.clear() # 캐시 삭제 (기억 지우기)
+            st.cache_data.clear()
             st.session_state['step1_data'] = {}
             st.session_state['step2_df'] = None
-            st.rerun() # 앱 재시작
-            
+            st.rerun()
         st.divider()
         if st.button("로그아웃"): st.session_state['logged_in'] = False; st.rerun()
 
@@ -218,37 +219,44 @@ else:
             st.session_state['step1_data'] = {}
             st.session_state['step2_df'] = None
             st.session_state['current_step'] = 1
-            st.session_state['last_input_key'] = current_key
-            st.rerun()
+            st.session_state['last_input_key'] = current_key; st.rerun()
         st.divider()
 
-        # [STEP 1] 운영 현황 및 근무자 배정 (스케줄러)
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 통계 및 근무자 선택")
-            st.info("👋 **사용법:** 날짜별로 **근무한 해설사를 모두 선택**해주세요.")
             
+            with st.expander("➕ 비고(특이사항) 범례 추가하기", expanded=False):
+                c_add1, c_add2 = st.columns([3, 1])
+                new_cat = c_add1.text_input("새로운 범례 입력 (예: 태풍피해, VIP방문)", label_visibility="collapsed")
+                if c_add2.button("추가"):
+                    if new_cat and new_cat not in st.session_state['event_categories']:
+                        st.session_state['event_categories'].append(new_cat)
+                        st.success(f"'{new_cat}' 추가됨!")
+                        st.rerun()
+
             _, last_day = calendar.monthrange(t_year, t_month)
             day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
             
             with st.form("roster_form"):
-                h1, h2, h3, h4, h5 = st.columns([1.2, 1, 1, 1, 3])
-                h1.markdown("**날짜 (요일)**")
-                h2.markdown("**방문자**")
-                h3.markdown("**청취자**")
-                h4.markdown("**해설횟수**")
-                h5.markdown("**✅ 근무 해설사 선택 (명단에 없으면 사이드바 새로고침)**")
+                h1, h2, h3, h4, h5, h6 = st.columns([1.2, 0.8, 0.8, 0.8, 2, 2])
+                h1.markdown("**날짜**")
+                h2.markdown("**방문**")
+                h3.markdown("**청취**")
+                h4.markdown("**횟수**")
+                h5.markdown("**✅ 근무자**")
+                h6.markdown("**📝 비고**")
                 
                 if not st.session_state['step1_data']:
                     for d in day_range:
                         d_str = datetime(t_year, t_month, d).strftime("%Y-%m-%d")
-                        st.session_state['step1_data'][d_str] = {"v": 0, "l": 0, "c": 0, "guides": []}
+                        st.session_state['step1_data'][d_str] = {"v": 0, "l": 0, "c": 0, "guides": [], "events": []}
 
                 for d in day_range:
                     d_obj = datetime(t_year, t_month, d)
                     d_str = d_obj.strftime("%Y-%m-%d")
                     day_name = d_obj.strftime("%a")
                     
-                    c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 1, 3])
+                    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 0.8, 0.8, 0.8, 2, 2])
                     c1.text(f"{d}일 ({day_name})")
                     
                     val = st.session_state['step1_data'][d_str]
@@ -256,17 +264,17 @@ else:
                     new_l = c3.number_input(f"l_{d}", value=val["l"], min_value=0, label_visibility="collapsed", key=f"l_{d}")
                     new_c = c4.number_input(f"c_{d}", value=val["c"], min_value=0, label_visibility="collapsed", key=f"c_{d}")
                     
-                    # 멀티셀렉트
-                    new_guides = c5.multiselect(
-                        f"g_{d}", 
-                        island_users, 
-                        default=val["guides"], 
+                    new_guides = c5.multiselect(f"g_{d}", island_users, default=val["guides"], label_visibility="collapsed", key=f"g_{d}", placeholder="근무자")
+                    new_events = c6.multiselect(
+                        f"e_{d}", 
+                        st.session_state['event_categories'], 
+                        default=val.get("events", []), 
                         label_visibility="collapsed", 
-                        key=f"g_{d}",
-                        placeholder="근무자 선택"
+                        key=f"e_{d}",
+                        placeholder="특이사항"
                     )
                     
-                    st.session_state['step1_data'][d_str] = {"v": new_v, "l": new_l, "c": new_c, "guides": new_guides}
+                    st.session_state['step1_data'][d_str] = {"v": new_v, "l": new_l, "c": new_c, "guides": new_guides, "events": new_events}
                 
                 st.divider()
                 submitted1 = st.form_submit_button("💾 저장 및 다음 단계")
@@ -279,27 +287,27 @@ else:
                     d_str = datetime(t_year, t_month, d).strftime("%Y-%m-%d")
                     data = st.session_state['step1_data'][d_str]
                     guides = data['guides']
+                    events_str = ", ".join(data['events'])
                     
-                    if guides or data['v']>0 or data['l']>0 or data['c']>0:
-                        stats_rows.append([d_str, sel_island, sel_place, "운영통계", 0, data['v'], data['l'], data['c'], str(datetime.now()), "검토대기"])
+                    if guides or data['v']>0 or data['l']>0 or data['c']>0 or events_str:
+                        stats_rows.append([d_str, sel_island, sel_place, "운영통계", 0, data['v'], data['l'], data['c'], events_str, str(datetime.now()), "검토대기"])
                     
                     for g_name in guides:
                         step2_rows.append([d_str, g_name, "8시간", 0, False])
 
                 if stats_rows: 
-                    if save_overwrite("운영일지", stats_rows): st.toast("✅ 운영 통계 저장 완료!")
+                    if save_overwrite("운영일지", stats_rows): st.toast("✅ 저장 완료!")
                 
                 if step2_rows:
                     st.session_state['step2_df'] = pd.DataFrame(step2_rows, columns=["일자", "해설사", "활동시간", "시간(직접)", "확인"])
                     st.session_state['current_step'] = 2
                     st.rerun()
                 else:
-                    st.warning("선택된 근무자가 없습니다.")
+                    st.warning("선택된 내용이 없습니다.")
 
         # [STEP 2] 활동 시간 확인
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 근무 시간 확정")
-            st.info("✅ 1단계에서 선택한 근무자 명단입니다. **활동 시간만 확인**하고 저장하세요.")
             
             with st.form("step2_form"):
                 edited_df = st.data_editor(
@@ -324,18 +332,17 @@ else:
                     elif r["활동시간"] == "직접입력": fh = float(r["시간(직접)"] or 0)
                     
                     if fh == 0: continue
-                    all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, str(datetime.now()), "검토대기"])
+                    all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, "", str(datetime.now()), "검토대기"])
                 
                 if save_overwrite("운영일지", all_r): 
-                    st.success("🎉 모든 데이터가 저장되었습니다!"); 
+                    st.success("🎉 저장 완료!"); 
                     time.sleep(1.5)
                     st.session_state['step1_data'] = {}
                     st.session_state['step2_df'] = None
                     st.session_state['current_step'] = 1
                     st.rerun()
             
-            if st.button("🔙 1단계로 돌아가기 (인원 재설정)"): 
-                st.session_state['current_step']=1; st.rerun()
+            if st.button("🔙 1단계로 돌아가기"): st.session_state['current_step']=1; st.rerun()
 
     with tabs[1]: # 조회
         if st.button("내역 조회"):
@@ -345,22 +352,7 @@ else:
             except: st.error("없음")
 
     with tabs[2]: # 계획
-        c1, c2 = st.columns(2)
-        with c1: py = st.number_input("년", 2025)
-        with c2: pm = st.number_input("월 ", datetime.now().month)
-        pp = st.radio("기간 ", ["전반기", "후반기"])
-        pl = st.selectbox("예정지", locations.get(user['섬'], ["-"]))
-        _, ld = calendar.monthrange(py, pm)
-        rng = range(1, 16) if "전반기" in pp else range(16, ld+1)
-        
-        with st.form("plan_form"):
-            sels = st.multiselect("일자 선택", [f"{d}일" for d in rng])
-            plan_submit = st.form_submit_button("계획 제출")
-            
-        if plan_submit:
-            rows = [[datetime(py, pm, int(s.replace("일",""))).strftime("%Y-%m-%d"), user['섬'], pl, my_name, "", str(datetime.now())] for s in sels]
-            try: client.open(SPREADSHEET_NAME).worksheet("월간계획").append_rows(rows); st.success("완료")
-            except: st.error("실패")
+        st.info("계획 입력 기능") 
 
     if my_role in ["조장", "관리자"]: # 검토
         with tabs[3]:
@@ -396,7 +388,6 @@ else:
                 with st.form("arrivals_form"):
                     new_arrivals = st.data_editor(st.session_state['monthly_arrivals'], hide_index=True, use_container_width=True)
                     saved = st.form_submit_button("💾 입도객 데이터 서버에 저장하기")
-                
                 if saved:
                     st.session_state['monthly_arrivals'] = new_arrivals
                     if save_monthly_data_to_sheet(new_arrivals): st.success("✅ 저장 완료")
@@ -447,14 +438,11 @@ else:
                     df = pd.DataFrame(client.open(SPREADSHEET_NAME).worksheet("운영일지").get_all_records())
                     df['날짜'] = pd.to_datetime(df['날짜'])
                     df['월'] = df['날짜'].dt.month
-                    df = df[df['월']>=3]
-                    for c in ['방문자','청취자','해설횟수']: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-
-                    st.subheader("1. 📈 월별 추세")
+                    
+                    st.subheader("1. 📈 월별 방문객 추세")
                     m_stats = df.groupby(['섬','월'])['방문자'].sum().reset_index()
                     arr = st.session_state['monthly_arrivals'].copy()
                     arr['월_숫자'] = arr['월'].str.replace("월","").astype(int)
-                    
                     for isl in ["백령도", "대청도", "소청도"]:
                         ist = m_stats[m_stats['섬']==isl]
                         if not ist.empty:
@@ -463,9 +451,8 @@ else:
                             st.write(f"**🏝️ {isl}**")
                             st.line_chart(mged.set_index('월_숫자')[['방문자','방문율(%)']])
 
-                    st.subheader("2. 🚢 결항(D02 중단) 시 행동 분석")
-                    if not st.session_state['cancellation_dates']: st.info("결항일 없음")
-                    else:
+                    st.subheader("2. 🚢 결항 시 행동 분석")
+                    if st.session_state['cancellation_dates']:
                         cds = sorted([pd.to_datetime(d) for d in st.session_state['cancellation_dates']])
                         cmap = {}
                         streak, prev = 1, None
@@ -476,8 +463,31 @@ else:
                             prev=d
                         df['결항일차'] = df['날짜'].map(cmap).fillna(0)
                         cdf = df[df['결항일차']>0]
-                        if cdf.empty: st.warning("데이터 없음")
-                        else:
+                        if not cdf.empty:
                             pvt = cdf.groupby(['결항일차','장소'])['방문자'].mean().reset_index().pivot(index='결항일차',columns='장소',values='방문자').fillna(0)
                             st.line_chart(pvt)
+                    else: st.info("결항 데이터 없음")
+
+                    st.subheader("3. 🚩 특이사항 빈도 분석")
+                    if '비고' in df.columns:
+                        event_df = df[df['비고'] != ""]
+                        if not event_df.empty:
+                            all_events = []
+                            for events in event_df['비고']:
+                                split_ev = [e.strip() for e in events.split(",")]
+                                all_events.extend(split_ev)
+                            
+                            counts = Counter(all_events)
+                            count_df = pd.DataFrame.from_dict(counts, orient='index', columns=['횟수']).sort_values('횟수', ascending=False)
+                            
+                            c_chart1, c_chart2 = st.columns(2)
+                            with c_chart1:
+                                st.write("**항목별 발생 횟수**")
+                                st.bar_chart(count_df)
+                            with c_chart2:
+                                st.write("**상세 내역**")
+                                st.dataframe(event_df[['날짜', '섬', '장소', '비고']])
+                        else: st.info("기록된 특이사항 없음")
+                    else: st.warning("'비고' 컬럼 없음")
+
                 except Exception as e: st.error(str(e))
