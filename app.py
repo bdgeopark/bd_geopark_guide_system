@@ -39,7 +39,10 @@ if 'step2_df' not in st.session_state: st.session_state['step2_df'] = None
 if 'current_step' not in st.session_state: st.session_state['current_step'] = 1
 if 'last_input_key' not in st.session_state: st.session_state['last_input_key'] = ""
 if 'cancellation_dates' not in st.session_state: st.session_state['cancellation_dates'] = []
-# 범례는 이제 시트에서 불러오므로 초기화 불필요 (로드 함수에서 처리)
+
+# 비고(이벤트) 범례 초기값
+if 'event_categories' not in st.session_state:
+    st.session_state['event_categories'] = ["학생견학/체험활동", "외부단체", "상괭이 사체", "물범 사체", "지뢰 발견"]
 
 # API 설정
 if 'api_key' not in st.session_state: st.session_state['api_key'] = FIXED_API_KEY
@@ -71,37 +74,27 @@ locations = {
 # ---------------------------------------------------------
 # 2. 기능 함수
 # ---------------------------------------------------------
-# ★ [핵심] 범례(카테고리) 불러오기 및 시트 자동생성
 def load_event_categories():
     default_cats = ["학생견학/체험활동", "외부단체", "상괭이 사체", "물범 사체", "지뢰 발견"]
     if client is None: return default_cats
-    
     try:
         doc = client.open(SPREADSHEET_NAME)
-        try:
-            sheet = doc.worksheet("설정")
+        try: sheet = doc.worksheet("설정")
         except:
-            # 시트가 없으면 자동 생성
             sheet = doc.add_worksheet(title="설정", rows=100, cols=2)
-            # 기본값 쓰기 (세로로)
             sheet.update(range_name='A1:A'+str(len(default_cats)), values=[[c] for c in default_cats])
             return default_cats
-        
-        # 시트가 있으면 읽어오기
-        vals = sheet.col_values(1) # A열 읽기
-        if not vals: # 비어있으면 기본값 채우기
+        vals = sheet.col_values(1)
+        if not vals:
             sheet.update(range_name='A1:A'+str(len(default_cats)), values=[[c] for c in default_cats])
             return default_cats
-        
         return vals
-    except:
-        return default_cats
+    except: return default_cats
 
-# ★ [핵심] 새 범례 추가하기 (영구 저장)
 def add_new_category_to_sheet(new_cat):
     try:
         sheet = client.open(SPREADSHEET_NAME).worksheet("설정")
-        sheet.append_row([new_cat]) # 맨 아래 추가
+        sheet.append_row([new_cat])
         return True
     except: return False
 
@@ -121,11 +114,9 @@ def save_monthly_data_to_sheet(df):
         return True
     except: return False
 
-# 초기 데이터 로드
 if 'monthly_arrivals' not in st.session_state or not isinstance(st.session_state['monthly_arrivals'], pd.DataFrame):
     st.session_state['monthly_arrivals'] = load_monthly_data()
 
-# ★ 앱 시작 시 범례 로드 (없으면 세션에 저장)
 if 'event_categories' not in st.session_state:
     st.session_state['event_categories'] = load_event_categories()
 
@@ -144,7 +135,6 @@ def login(username, password):
             if u_id == str(username).strip() and u_pw == str(password).strip():
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = user
-                # 로그인 성공 시 데이터들 최신화
                 st.session_state['monthly_arrivals'] = load_monthly_data()
                 st.session_state['event_categories'] = load_event_categories()
                 st.success(f"환영합니다, {user['이름']}님!")
@@ -229,7 +219,7 @@ else:
             st.cache_data.clear()
             st.session_state['step1_data'] = {}
             st.session_state['step2_df'] = None
-            st.session_state['event_categories'] = load_event_categories() # 범례도 새로고침
+            st.session_state['event_categories'] = load_event_categories()
             st.rerun()
         st.divider()
         if st.button("로그아웃"): st.session_state['logged_in'] = False; st.rerun()
@@ -264,21 +254,17 @@ else:
         if st.session_state['current_step'] == 1:
             st.markdown("### 1️⃣ 단계: 운영 통계 및 근무자 선택")
             
-            # ★ 범례 영구 추가 기능
             with st.expander("➕ 비고(특이사항) 범례 관리", expanded=False):
-                st.caption("새로운 항목을 입력하고 추가하면, 구글 시트('설정')에 저장되어 계속 사용할 수 있습니다.")
                 c_add1, c_add2 = st.columns([3, 1])
-                new_cat = c_add1.text_input("새로운 항목 입력", placeholder="예: 태풍 피해, VIP 방문 등", label_visibility="collapsed")
+                new_cat = c_add1.text_input("새로운 항목 입력", label_visibility="collapsed")
                 if c_add2.button("영구 추가"):
                     if new_cat and new_cat not in st.session_state['event_categories']:
-                        # 시트에 저장 시도
                         if add_new_category_to_sheet(new_cat):
                             st.session_state['event_categories'].append(new_cat)
                             st.success(f"✅ '{new_cat}' 저장 완료!")
                             time.sleep(1)
                             st.rerun()
-                        else:
-                            st.error("저장 실패 (네트워크 오류)")
+                        else: st.error("저장 실패")
 
             _, last_day = calendar.monthrange(t_year, t_month)
             day_range = range(1, 16) if "전반기" in period else range(16, last_day + 1)
@@ -352,10 +338,8 @@ else:
                 else:
                     st.warning("선택된 내용이 없습니다.")
 
-        # [STEP 2] 활동 시간 확인
         elif st.session_state['current_step'] == 2:
             st.markdown("### 2️⃣ 단계: 근무 시간 확정")
-            
             with st.form("step2_form"):
                 edited_df = st.data_editor(
                     st.session_state['step2_df'],
@@ -377,7 +361,6 @@ else:
                     if r["활동시간"] == "8시간": fh = 8
                     elif r["활동시간"] == "4시간": fh = 4
                     elif r["활동시간"] == "직접입력": fh = float(r["시간(직접)"] or 0)
-                    
                     if fh == 0: continue
                     all_r.append([r["일자"], sel_island, sel_place, r["해설사"], fh, 0, 0, 0, "", str(datetime.now()), "검토대기"])
                 
@@ -413,7 +396,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계
+    # 탭 5: 고급 통계 (★ 상세 피벗 통계 추가)
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -429,7 +412,6 @@ else:
 
             st.subheader("1. 📥 데이터 입력")
             t_i1, t_i2 = st.tabs(["월별 입도객", "결항일 관리"])
-            
             with t_i1:
                 st.info("월별 입도객 수를 입력하세요.")
                 with st.form("arrivals_form"):
@@ -439,15 +421,15 @@ else:
                     st.session_state['monthly_arrivals'] = new_arrivals
                     if save_monthly_data_to_sheet(new_arrivals): st.success("✅ 저장 완료")
                     else: st.error("❌ 저장 실패")
-            
             with t_i2:
+                # 결항 조회 로직 (생략 없이 작동)
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
                 c_a1, c_a2 = st.columns([1, 2])
                 with c_a1: t_m = st.number_input("조회 월", 1, 12, datetime.now().month)
                 with c_a2:
-                    st.write("")
-                    st.write("")
+                    st.write(""); st.write("")
                     if st.button(f"{t_m}월 결항일 자동 가져오기"):
+                        # ... (API 호출 및 로직 유지) ...
                         if not st.session_state['api_key']: st.error("API 키 필요")
                         else:
                             y = datetime.now().year
@@ -468,12 +450,11 @@ else:
                                     time.sleep(0.1)
                                 s.update(label="완료!", state="complete", expanded=False)
                             if f_dates:
-                                st.success(f"D02 항로 특이사항(결항) {len(f_dates)}일 발견: {f_dates}")
+                                st.success(f"특이사항 {len(f_dates)}건 발견: {f_dates}")
                                 cur = set(st.session_state['cancellation_dates'])
                                 cur.update(f_dates)
                                 st.session_state['cancellation_dates'] = sorted(list(cur))
                             else: st.info("정상 운항")
-                
                 if st.session_state['cancellation_dates']:
                     rd = st.multiselect("삭제할 날짜", st.session_state['cancellation_dates'])
                     if st.button("선택 삭제"):
@@ -485,8 +466,28 @@ else:
                     df = pd.DataFrame(client.open(SPREADSHEET_NAME).worksheet("운영일지").get_all_records())
                     df['날짜'] = pd.to_datetime(df['날짜'])
                     df['월'] = df['날짜'].dt.month
+                    for c in ['방문자','청취자','해설횟수']: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
+                    # ★ 1. 안내소별 상세 실적 (피벗)
+                    st.markdown("### 1. 🏢 안내소별/월별 상세 실적")
+                    metric_option = st.radio("보고 싶은 항목 선택", ["방문자", "청취자", "해설횟수"], horizontal=True)
                     
-                    st.subheader("1. 📈 월별 방문객 추세")
+                    # 피벗 테이블 생성 (섬 > 장소 순으로 정렬)
+                    pivot_df = df.pivot_table(
+                        index=["섬", "장소"],
+                        columns="월",
+                        values=metric_option,
+                        aggfunc="sum",
+                        fill_value=0,
+                        margins=True,
+                        margins_name="합계"
+                    )
+                    st.dataframe(pivot_df, use_container_width=True)
+
+                    st.divider()
+
+                    # 2. 월별 추세
+                    st.markdown("### 2. 📈 월별 전체 추세")
                     m_stats = df.groupby(['섬','월'])['방문자'].sum().reset_index()
                     arr = st.session_state['monthly_arrivals'].copy()
                     arr['월_숫자'] = arr['월'].str.replace("월","").astype(int)
@@ -498,7 +499,8 @@ else:
                             st.write(f"**🏝️ {isl}**")
                             st.line_chart(mged.set_index('월_숫자')[['방문자','방문율(%)']])
 
-                    st.subheader("2. 🚢 결항 시 행동 분석")
+                    # 3. 결항 분석
+                    st.markdown("### 3. 🚢 결항 시 행동 분석")
                     if st.session_state['cancellation_dates']:
                         cds = sorted([pd.to_datetime(d) for d in st.session_state['cancellation_dates']])
                         cmap = {}
@@ -515,7 +517,8 @@ else:
                             st.line_chart(pvt)
                     else: st.info("결항 데이터 없음")
 
-                    st.subheader("3. 🚩 특이사항 빈도 분석")
+                    # 4. 특이사항
+                    st.markdown("### 4. 🚩 특이사항 빈도 분석")
                     if '비고' in df.columns:
                         event_df = df[df['비고'] != ""]
                         if not event_df.empty:
@@ -526,15 +529,9 @@ else:
                             
                             counts = Counter(all_events)
                             count_df = pd.DataFrame.from_dict(counts, orient='index', columns=['횟수']).sort_values('횟수', ascending=False)
-                            
-                            c_chart1, c_chart2 = st.columns(2)
-                            with c_chart1:
-                                st.write("**항목별 발생 횟수**")
-                                st.bar_chart(count_df)
-                            with c_chart2:
-                                st.write("**상세 내역**")
-                                st.dataframe(event_df[['날짜', '섬', '장소', '비고']])
+                            c1, c2 = st.columns(2)
+                            with c1: st.bar_chart(count_df)
+                            with c2: st.dataframe(event_df[['날짜', '섬', '장소', '비고']], hide_index=True)
                         else: st.info("기록된 특이사항 없음")
-                    else: st.warning("'비고' 컬럼 없음")
 
                 except Exception as e: st.error(str(e))
