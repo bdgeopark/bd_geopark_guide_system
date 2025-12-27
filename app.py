@@ -396,7 +396,7 @@ else:
                 except: st.error("오류")
 
     # -----------------------------------------------------
-    # 탭 5: 고급 통계 (★ 상세 피벗 통계 추가)
+    # 탭 5: 고급 통계 (★ 통합 피벗 테이블 적용)
     # -----------------------------------------------------
     if my_role == "관리자":
         with tabs[4]:
@@ -422,14 +422,12 @@ else:
                     if save_monthly_data_to_sheet(new_arrivals): st.success("✅ 저장 완료")
                     else: st.error("❌ 저장 실패")
             with t_i2:
-                # 결항 조회 로직 (생략 없이 작동)
                 st.info("D02(인천 출발) 항로의 전면/부분 결항을 찾습니다.")
                 c_a1, c_a2 = st.columns([1, 2])
                 with c_a1: t_m = st.number_input("조회 월", 1, 12, datetime.now().month)
                 with c_a2:
                     st.write(""); st.write("")
                     if st.button(f"{t_m}월 결항일 자동 가져오기"):
-                        # ... (API 호출 및 로직 유지) ...
                         if not st.session_state['api_key']: st.error("API 키 필요")
                         else:
                             y = datetime.now().year
@@ -468,19 +466,17 @@ else:
                     df['월'] = df['날짜'].dt.month
                     for c in ['방문자','청취자','해설횟수']: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-                    # ★ 1. 안내소별 상세 실적 (피벗)
-                    st.markdown("### 1. 🏢 안내소별/월별 상세 실적")
-                    metric_option = st.radio("보고 싶은 항목 선택", ["방문자", "청취자", "해설횟수"], horizontal=True)
+                    # ★ 1. 안내소별 상세 실적 (통합 피벗 테이블)
+                    st.markdown("### 1. 🏢 안내소별/월별 상세 실적 (통합)")
                     
-                    # 피벗 테이블 생성 (섬 > 장소 순으로 정렬)
                     pivot_df = df.pivot_table(
                         index=["섬", "장소"],
                         columns="월",
-                        values=metric_option,
+                        values=["방문자", "청취자", "해설횟수"], # ★ 3가지 항목 모두 포함
                         aggfunc="sum",
                         fill_value=0,
-                        margins=True,
-                        margins_name="합계"
+                        margins=True, # ★ 행/열 합계 자동 계산
+                        margins_name="합계(All)"
                     )
                     st.dataframe(pivot_df, use_container_width=True)
 
