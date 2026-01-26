@@ -605,8 +605,8 @@ else:
                 except Exception as e: st.error(str(e))
 
 # -----------------------------------------------------
-# 탭 3: 활동 계획 (안내소 단위 반영)
-# -----------------------------------------------------
+    # 탭 3: 활동 계획 (업그레이드: 조장 탭 분리 + 시간 선택)
+    # -----------------------------------------------------
     with tabs[2]: 
         st.header("🗓️ 안내소별 활동 계획 수립")
         
@@ -628,201 +628,194 @@ else:
         else:
             target_dates = [datetime(p_year, p_month, d).strftime("%Y-%m-%d") for d in range(16, last_day + 1)]
 
-        # DB 로드
+        # DB 로드 (관리자는 조회용 섬 선택)
         current_island = user['섬'] if my_role != "관리자" else st.selectbox("섬 선택 (관리자)", ["백령도", "대청도", "소청도"])
         plan_df = load_plan_data(p_year, p_month, current_island)
-        
-        # 안내소 목록 가져오기
         place_options = locations.get(current_island, [])
+        
+        shift_options = ["", "종일", "오전(4시간)", "오후(4시간)", "기타"]
 
         st.divider()
 
-        # -------------------------------------------------
-        # [해설사 모드] 안내소 선택 -> 근무일 체크 -> 제출
-        # -------------------------------------------------
-        if my_role == "해설사":
-            st.subheader(f"🙋‍♂️ {my_name}님의 근무 신청")
+        # =================================================
+        # 🟢 [기능 1] 내 계획 입력 함수 (공통 모듈)
+        # =================================================
+        def render_my_plan_input(role_name, user_name):
+            st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
             
             # 1. 안내소 선택
-            selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options)
+            selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
+            st.info(f"👉 **{selected_place}** 근무 일정을 입력하세요.")
+
+            # 2. 기존 데이터 매핑
+            # DataFrame 생성: [날짜, 요일, 근무형태]
+            input_data = []
             
-            st.info(f"👉 **{selected_place}**에서 근무할 날짜를 선택해주세요.")
-
-            # 기존 내 계획 확인
-            my_plan = []
+            # 내 기존 데이터 필터링
+            my_prev_data = {}
             if not plan_df.empty:
-                # 내가 '활동(O)'으로 되어있는 날짜들
-                my_df = plan_df[(plan_df['이름'] == my_name) & (plan_df['활동여부'] == "O")]
-                my_plan = my_df['일자'].tolist()
+                # 이름과 장소가 일치하는 데이터 찾기
+                cond = (plan_df['이름'] == user_name) & (plan_df['장소'] == selected_place)
+                filtered = plan_df[cond]
+                for _, r in filtered.iterrows():
+                    # 활동여부에 "종일", "오전" 등이 저장되어 있음 (없으면 "")
+                    my_prev_data[r['일자']] = r['활동여부']
 
-            with st.form("plan_submit_form"):
-                selected_dates = []
-                cols = st.columns(5)
-                for idx, d_str in enumerate(target_dates):
-                    d_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                    w_day = d_obj.strftime("%a")
-                    # 이미 신청한 날짜면 체크 상태로 표시
-                    is_checked = d_str in my_plan
-                    
-                    with cols[idx % 5]:
-                        # 체크박스 라벨에 요일 포함
-                        if st.checkbox(f"{d_obj.day}일({w_day})", value=is_checked, key=f"p_{d_str}"):
-                            selected_dates.append(d_str)
+            for d_str in target_dates:
+                d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                w_day = d_obj.strftime("%a")
+                # 기존 값이 있으면 가져오고, 없으면 ""(빈값)
+                current_val = my_prev_data.get(d_str, "")
+                # 데이터가 "O"로 저장된 옛날 버전 호환성 처리
+                if current_val == "O": current_val = "종일" 
                 
-                st.write("")
-                if st.form_submit_button("🚀 근무 계획 제출하기"):
-                    save_rows = []
-                    for d in target_dates:
-                        # 체크한 날은 'O' + 선택한 장소 저장
-                        if d in selected_dates:
-                            save_rows.append([p_year, p_month, d, current_island, selected_place, my_name, "O", "", str(datetime.now())])
-                        else:
-                            # 체크 해제한 날은 빈 값으로 덮어써서 취소 처리 (장소는 유지하거나 빈값)
-                            save_rows.append([p_year, p_month, d, current_island, selected_place, my_name, "", "", str(datetime.now())])
-                            
-                    if save_plan_data(save_rows):
-                        st.success(f"{p_month}월 {selected_place} 근무 계획이 제출되었습니다!")
-                        time.sleep(1.5); st.rerun()
+                input_data.append({
+                    "날짜": d_str,
+                    "요일": w_day,
+                    "근무형태": current_val
+                })
+            
+            input_df = pd.DataFrame(input_data)
 
-        # -------------------------------------------------
-        # [조장/관리자 모드] 안내소별 현황판 & 출력
-        # -------------------------------------------------
-        else:
+            # 3. 데이터 에디터 (표 입력)
+            with st.form("my_plan_form"):
+                edited_df = st.data_editor(
+                    input_df,
+                    column_config={
+                        "날짜": st.column_config.TextColumn(disabled=True),
+                        "요일": st.column_config.TextColumn(disabled=True),
+                        "근무형태": st.column_config.SelectboxColumn(
+                            "근무 선택",
+                            options=shift_options,
+                            required=True
+                        )
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    height=600 # 높이 조절
+                )
+
+                if st.form_submit_button("💾 내 계획 저장하기"):
+                    save_rows = []
+                    for _, row in edited_df.iterrows():
+                        d_val = row['날짜']
+                        s_val = row['근무형태']
+                        
+                        # 선택된 값이 있으면 저장, 없으면 빈 값으로 저장(취소 효과)
+                        # 장소 정보 포함하여 저장
+                        save_rows.append([p_year, p_month, d_val, current_island, selected_place, user_name, s_val, "", str(datetime.now())])
+                    
+                    if save_plan_data(save_rows):
+                        st.success("✅ 저장되었습니다!")
+                        time.sleep(1); st.rerun()
+
+        # =================================================
+        # 🔵 [기능 2] 조원 계획 승인/관리 함수 (조장용)
+        # =================================================
+        def render_team_approval():
             c_view1, c_view2 = st.columns([2, 1])
             with c_view1:
-                target_place = st.selectbox("관리할 안내소 선택", place_options)
+                target_place = st.selectbox("관리할 안내소 선택", place_options, key="lead_place_sel")
             with c_view2:
                 special_note = st.text_input("특이사항 (출력용)", placeholder="예: 행사 지원 등")
 
-            st.subheader(f"📋 {target_place} 근무자 편성표")
+            st.subheader(f"📋 {target_place} 근무 편성표")
 
-            # 1. 해당 안내소에 신청한 데이터만 필터링 + (장소 미정이거나 다른 장소 신청자 제외 로직 필요시 추가)
-            # 여기서는 '해당 안내소'로 신청된 건만 보여줍니다.
+            # 1. 데이터 가공
+            # 해당 장소에 신청된 내역만 필터링
             place_plan_df = pd.DataFrame()
             if not plan_df.empty:
-                # 장소 컬럼이 없을 경우 대비
                 if '장소' not in plan_df.columns: plan_df['장소'] = "미지정"
-                place_plan_df = plan_df[(plan_df['장소'] == target_place) & (plan_df['활동여부'] == "O")]
+                # 활동여부가 비어있지 않은 것만 가져옴
+                place_plan_df = plan_df[(plan_df['장소'] == target_place) & (plan_df['활동여부'] != "")]
 
-            # 이 섬의 전체 해설사 목록 (수정 가능하게 하기 위해)
             users_in_island = get_users_by_island_cached(current_island)
 
-            # 매트릭스 데이터 생성
+            # 매트릭스 생성 (행: 날짜, 열: 유저, 값: 근무형태)
             matrix_data = []
             for d in target_dates:
                 d_obj = datetime.strptime(d, "%Y-%m-%d")
                 row = {
                     "날짜": f"{d_obj.day}일 ({d_obj.strftime('%a')})", 
                     "raw_date": d,
-                    "참여 인원": 0
                 }
                 
-                # 각 해설사가 이 날짜, 이 장소에 신청했는지 확인
-                active_users = []
+                active_count = 0
                 for u in users_in_island:
-                    is_active = False
+                    val = ""
                     if not place_plan_df.empty:
+                        # 해당 날짜, 해당 유저 데이터 찾기
                         check = place_plan_df[(place_plan_df['일자'] == d) & (place_plan_df['이름'] == u)]
-                        if not check.empty: is_active = True
+                        if not check.empty:
+                            val = check.iloc[0]['활동여부']
+                            if val == "O": val = "종일" # 호환성
                     
-                    row[u] = is_active
-                    if is_active: active_users.append(u)
+                    row[u] = val
+                    if val: active_count += 1
                 
-                row["참여 인원"] = len(active_users)
+                row["인원"] = active_count
                 matrix_data.append(row)
 
             matrix_df = pd.DataFrame(matrix_data)
 
-            # 2. 편집용 테이블 (관리자가 강제 조정 가능)
+            # 2. 동적 컬럼 설정 (모든 유저 컬럼을 Selectbox로)
+            col_config = {
+                "날짜": st.column_config.TextColumn(disabled=True),
+                "raw_date": None, # 숨김
+                "인원": st.column_config.NumberColumn(disabled=True)
+            }
+            for u in users_in_island:
+                col_config[u] = st.column_config.SelectboxColumn(
+                    label=f"{u}",
+                    options=shift_options,
+                    width="small"
+                )
+
+            # 3. 데이터 에디터 출력
             edited_matrix = st.data_editor(
                 matrix_df,
-                column_config={
-                    "날짜": st.column_config.TextColumn(disabled=True),
-                    "raw_date": None, # 숨김
-                    "참여 인원": st.column_config.NumberColumn(disabled=True)
-                },
+                column_config=col_config,
                 hide_index=True,
                 use_container_width=True
             )
 
+            # 4. 저장 및 출력 버튼
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
-                if st.button("💾 변경사항 저장"):
+                if st.button("💾 전체 변경사항 저장"):
                     save_rows = []
                     for _, row in edited_matrix.iterrows():
                         d_real = row['raw_date']
                         for u in users_in_island:
-                            # 체크되어 있으면 'O', 아니면 ''
-                            status = "O" if row[u] else ""
-                            # 조장이 수정해서 저장하면 해당 장소로 확정됨
+                            status = row[u] # 종일, 오전, 오후 등
+                            if status is None: status = ""
+                            # 조장이 수정하면 해당 장소로 확정
                             save_rows.append([p_year, p_month, d_real, current_island, target_place, u, status, "", str(datetime.now())])
                     
                     if save_plan_data(save_rows):
-                        st.success("저장되었습니다.")
+                        st.success("배치표가 수정되었습니다.")
             
             with c_btn2:
-                if st.button("🖨️ 운영계획서 양식 출력"):
+                if st.button("🖨️ 운영계획서 출력 보기"):
                     st.divider()
-                    # --- [PDF 양식 HTML 생성] ---
-                    
-                    # 스타일 정의 (A4 스타일에 맞춤)
+                    # HTML 생성 로직
+                    # 스타일
                     st.markdown("""
                     <style>
-                    .report-container {
-                        font-family: "Malgun Gothic", sans-serif;
-                        border: 2px solid #000;
-                        padding: 30px;
-                        background-color: white;
-                        color: black;
-                    }
-                    .report-title {
-                        text-align: center;
-                        font-size: 24px;
-                        font-weight: bold;
-                        margin-bottom: 20px;
-                        border: 2px solid #000;
-                        padding: 10px;
-                    }
-                    .info-table {
-                        width: 100%;
-                        border-collapse: collapse;
-                        margin-bottom: 10px;
-                    }
-                    .info-table td {
-                        border: 1px solid #000;
-                        padding: 8px;
-                        font-size: 16px;
-                    }
-                    .main-table {
-                        width: 100%;
-                        border-collapse: collapse;
-                        text-align: center;
-                    }
-                    .main-table th {
-                        border: 1px solid #000;
-                        padding: 10px;
-                        background-color: #f0f0f0;
-                        font-weight: bold;
-                    }
-                    .main-table td {
-                        border: 1px solid #000;
-                        padding: 8px;
-                        height: 35px;
-                    }
-                    .signature-section {
-                        margin-top: 30px;
-                        display: flex;
-                        justify-content: space-around;
-                        font-size: 18px;
-                    }
+                    .report-container { font-family: "Malgun Gothic", sans-serif; border: 2px solid #000; padding: 30px; background-color: white; color: black; }
+                    .report-title { text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; border: 2px solid #000; padding: 10px; }
+                    .info-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+                    .info-table td { border: 1px solid #000; padding: 8px; font-size: 16px; }
+                    .main-table { width: 100%; border-collapse: collapse; text-align: center; }
+                    .main-table th { border: 1px solid #000; padding: 10px; background-color: #f0f0f0; font-weight: bold; }
+                    .main-table td { border: 1px solid #000; padding: 8px; height: 35px; }
+                    .signature-section { margin-top: 30px; display: flex; justify-content: space-around; font-size: 18px; }
                     </style>
                     """, unsafe_allow_html=True)
                     
-                    # HTML 본문 구성
                     html = f"""
                     <div class="report-container">
                         <div class="report-title">지질공원 안내소 운영계획서</div>
-                        
                         <table class="info-table">
                             <tr>
                                 <td style="width: 15%; background-color: #f9f9f9; text-align: center; font-weight: bold;">안내소</td>
@@ -837,7 +830,6 @@ else:
                                 <td>{p_range}</td>
                             </tr>
                         </table>
-
                         <table class="main-table">
                             <tr>
                                 <th style="width: 10%;">일</th>
@@ -847,15 +839,20 @@ else:
                             </tr>
                     """
                     
-                    # 데이터 행 추가
-                    # edited_matrix를 순회하며 실제 확정된 명단을 가져옴
                     for _, row in edited_matrix.iterrows():
                         d_obj = datetime.strptime(row['raw_date'], "%Y-%m-%d")
                         day_num = f"{d_obj.day}일"
                         day_str = d_obj.strftime('%a')
                         
-                        # 근무자 명단 추출 (True인 사람)
-                        workers = [u for u in users_in_island if row[u]]
+                        # 근무자 표시 로직
+                        # 이름만 나열하거나, (오전)홍길동 처럼 표시
+                        workers = []
+                        for u in users_in_island:
+                            s_type = row[u]
+                            if s_type:
+                                if s_type == "종일": workers.append(f"{u}")
+                                else: workers.append(f"{u}({s_type})")
+                        
                         workers_str = ", ".join(workers) if workers else ""
                         
                         html += f"""
@@ -863,12 +860,12 @@ else:
                                 <td>{day_num}</td>
                                 <td>{day_str}</td>
                                 <td style="text-align: left; padding-left: 10px;">{workers_str}</td>
-                                <td></td> </tr>
+                                <td></td>
+                            </tr>
                         """
                     
                     html += """
                         </table>
-                        
                         <div class="signature-section">
                             <div>조장 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
                             <div>면 담당 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
@@ -876,6 +873,21 @@ else:
                         <div style="text-align: right; margin-top: 10px;">20&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.</div>
                     </div>
                     """
-                    
                     st.markdown(html, unsafe_allow_html=True)
-                    st.info("💡 위 양식 위에서 마우스 우클릭 -> '인쇄' -> 'PDF로 저장'을 선택하세요.")
+                    st.info("💡 마우스 우클릭 -> 인쇄 -> PDF 저장")
+
+        # =================================================
+        # 🟡 [화면 분기] 역할에 따른 화면 표시
+        # =================================================
+        if my_role == "해설사":
+            # 해설사는 입력 화면만
+            render_my_plan_input("해설사", my_name)
+        else:
+            # 조장 및 관리자는 탭 분리
+            sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
+            
+            with sub_t1:
+                render_my_plan_input(my_role, my_name)
+            
+            with sub_t2:
+                render_team_approval()
