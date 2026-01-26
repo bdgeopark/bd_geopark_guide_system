@@ -610,7 +610,7 @@ else:
                 except Exception as e: st.error(str(e))
 
 # -----------------------------------------------------
-    # 탭 3: 활동 계획 (업그레이드: 한글 요일 + 필터링 + 현황판)
+    # 탭 3: 활동 계획 (최종 수정: 날짜 삭제 + 관리자 입력 제외)
     # -----------------------------------------------------
     with tabs[2]: 
         st.header("🗓️ 안내소별 활동 계획 수립")
@@ -618,7 +618,7 @@ else:
         # 0. 한글 요일 변환 헬퍼
         day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-        # 1. 공통 설정: 년/월/기간
+        # 1. 공통 설정
         today = datetime.now()
         next_month_date = today.replace(day=28) + pd.Timedelta(days=4)
         default_year = next_month_date.year
@@ -629,7 +629,7 @@ else:
         with c_p2: p_month = st.number_input("활동 월", value=default_month)
         with c_p3: p_range = st.radio("활동 기간", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True)
 
-        # 날짜 리스트 생성
+        # 날짜 리스트
         _, last_day = calendar.monthrange(p_year, p_month)
         if "전반기" in p_range:
             target_dates = [datetime(p_year, p_month, d).strftime("%Y-%m-%d") for d in range(1, 16)]
@@ -640,25 +640,21 @@ else:
         current_island = user['섬'] if my_role != "관리자" else st.selectbox("섬 선택 (관리자)", ["백령도", "대청도", "소청도"])
         plan_df = load_plan_data(p_year, p_month, current_island)
         place_options = locations.get(current_island, [])
-        
         shift_options = ["", "종일", "오전(4시간)", "오후(4시간)", "기타"]
 
         st.divider()
 
         # =================================================
-        # 🟢 [기능 1] 내 계획 입력 함수 (4개 체크박스 + 시간입력)
+        # 🟢 [기능 1] 내 계획 입력 함수
         # =================================================
         def render_my_plan_input(role_name, user_name):
             st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
-            
-            # 1. 안내소 선택
             selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
             st.info(f"👉 **{selected_place}** 근무 시간을 선택하세요. (기타 선택 시 시간 필수 입력)")
 
-            # 2. 데이터 매핑 (기존 데이터 불러와서 체크박스 상태로 변환)
+            # 데이터 매핑
             input_data = []
             my_prev_data = {}
-            
             if not plan_df.empty:
                 cond = (plan_df['이름'] == user_name) & (plan_df['장소'] == selected_place)
                 filtered = plan_df[cond]
@@ -667,45 +663,23 @@ else:
 
             for d_str in target_dates:
                 d_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                w_day = day_map[d_obj.weekday()] # 한글 요일
-                
-                # 기존 DB 값 가져오기
+                w_day = day_map[d_obj.weekday()]
                 db_val = my_prev_data.get(d_str, "")
                 
-                # 체크박스 상태 초기화
-                is_all = False
-                is_am = False
-                is_pm = False
-                is_etc = False
-                etc_text = ""
-
-                # DB 값에 따라 어떤 체크박스를 켤지 결정
-                if db_val == "종일":
-                    is_all = True
-                elif "오전" in db_val:
-                    is_am = True
-                elif "오후" in db_val:
-                    is_pm = True
-                elif db_val != "": # 비어있지 않은데 위의 키워드가 없으면 '기타'로 간주
-                    is_etc = True
-                    etc_text = db_val
+                is_all = False; is_am = False; is_pm = False; is_etc = False; etc_text = ""
+                if db_val == "종일": is_all = True
+                elif "오전" in db_val: is_am = True
+                elif "오후" in db_val: is_pm = True
+                elif db_val != "": is_etc = True; etc_text = db_val
 
                 input_data.append({
-                    "날짜": d_str,
-                    "요일": w_day,
-                    "종일": is_all,
-                    "오전": is_am,
-                    "오후": is_pm,
-                    "기타": is_etc,
-                    "⏰ 시간입력": etc_text # 기타일 때 입력할 텍스트
+                    "날짜": d_str, "요일": w_day,
+                    "종일": is_all, "오전": is_am, "오후": is_pm, "기타": is_etc, "⏰ 시간입력": etc_text
                 })
             
-            input_df = pd.DataFrame(input_data)
-
-            # 3. 데이터 에디터 (체크박스 4개 + 텍스트 1개)
             with st.form("my_plan_form"):
                 edited_df = st.data_editor(
-                    input_df,
+                    pd.DataFrame(input_data),
                     column_config={
                         "날짜": st.column_config.TextColumn(disabled=True),
                         "요일": st.column_config.TextColumn(disabled=True),
@@ -713,170 +687,106 @@ else:
                         "오전": st.column_config.CheckboxColumn("오전", default=False),
                         "오후": st.column_config.CheckboxColumn("오후", default=False),
                         "기타": st.column_config.CheckboxColumn("기타", default=False),
-                        "⏰ 시간입력": st.column_config.TextColumn(
-                            "⏰ 시간(기타)", 
-                            help="기타 체크 시 활동 시간을 입력하세요 (예: 13:00~15:00)",
-                            default=""
-                        )
+                        "⏰ 시간입력": st.column_config.TextColumn("⏰ 시간(기타)", default="")
                     },
-                    hide_index=True,
-                    use_container_width=True,
-                    height=600
+                    hide_index=True, use_container_width=True, height=600
                 )
-
-                st.caption("※ 여러 개를 동시에 체크할 경우 [종일 > 오전 > 오후 > 기타] 순서로 하나만 저장됩니다.")
-
                 if st.form_submit_button("💾 내 계획 저장하기"):
                     save_rows = []
                     for _, row in edited_df.iterrows():
-                        # 저장 로직: 체크박스 우선순위 적용
                         status = ""
-                        if row['종일']:
-                            status = "종일"
-                        elif row['오전']:
-                            status = "오전(4시간)"
-                        elif row['오후']:
-                            status = "오후(4시간)"
+                        if row['종일']: status = "종일"
+                        elif row['오전']: status = "오전(4시간)"
+                        elif row['오후']: status = "오후(4시간)"
                         elif row['기타']:
-                            # 기타를 체크했는데 시간 입력이 없으면 경고 대신 "시간미정" 등으로 처리하거나 빈값 유지
                             input_time = str(row['⏰ 시간입력']).strip()
                             status = input_time if input_time else "시간미정"
-                        else:
-                            status = "" # 아무것도 체크 안 함 -> 근무 없음
-
-                        save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", str(datetime.now())])
+                        save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", "", str(datetime.now())])
                     
                     if save_plan_data(save_rows):
                         st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
 
         # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (필터링 + 제출현황)
-        # =================================================
-        # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (승인+다운로드 통합)
+        # 🔵 [기능 2] 조원 계획 승인 (승인+다운로드)
         # =================================================
         def render_team_approval():
-            # [제출 현황판]
             st.markdown("#### 📊 계획 제출 현황")
             users_in_island = get_users_by_island_cached(current_island)
-            
             submitted_users = set()
             if not plan_df.empty:
                 active_df = plan_df[plan_df['활동여부'] != ""]
                 submitted_users = set(active_df['이름'].unique())
+            not_submitted = [u for u in users_in_island if u not in submitted_users]
             
-            not_submitted_users = [u for u in users_in_island if u not in submitted_users]
-            submitted_list_str = ", ".join(submitted_users) if submitted_users else "(없음)"
-            not_submitted_list_str = ", ".join(not_submitted_users) if not_submitted_users else "(모두 제출함)"
-
-            s_col1, s_col2 = st.columns(2)
-            s_col1.success(f"**제출 완료 ({len(submitted_users)}명):**\n\n {submitted_list_str}")
-            s_col2.error(f"**미제출 ({len(not_submitted_users)}명):**\n\n {not_submitted_list_str}")
-            
+            s1, s2 = st.columns(2)
+            s1.success(f"제출: {', '.join(submitted_users) if submitted_users else '(없음)'}")
+            s2.error(f"미제출: {', '.join(not_submitted) if not_submitted else '(완료)'}")
             st.divider()
 
-            # [장소 선택]
-            c_view1, c_view2 = st.columns([2, 1])
-            with c_view1:
-                target_place = st.selectbox("관리할 안내소 선택", place_options, key="lead_place_sel")
-            with c_view2:
-                special_note = st.text_input("특이사항 (출력용)", placeholder="예: 행사 지원 등")
+            c1, c2 = st.columns([2, 1])
+            with c1: target_place = st.selectbox("관리할 안내소 선택", place_options, key="lead_place_sel")
+            with c2: special_note = st.text_input("특이사항 (출력용)", placeholder="예: 행사 지원 등")
 
             st.subheader(f"📋 {target_place} 근무 편성표")
 
-            # [데이터 가공]
             place_plan_df = pd.DataFrame()
             if not plan_df.empty:
                 if '장소' not in plan_df.columns: plan_df['장소'] = "미지정"
-                if '상태' not in plan_df.columns: plan_df['상태'] = "" # 호환성
                 place_plan_df = plan_df[(plan_df['장소'] == target_place) & (plan_df['활동여부'] != "")]
 
-            # 신청자 필터링
-            active_users_in_place = []
-            if not place_plan_df.empty:
-                active_users_in_place = place_plan_df['이름'].unique().tolist()
+            active_users = []
+            if not place_plan_df.empty: active_users = place_plan_df['이름'].unique().tolist()
+            display_users = [u for u in users_in_island if u in active_users]
             
-            display_users = [u for u in users_in_island if u in active_users_in_place]
-            if not display_users:
-                st.warning(f"⚠️ '{target_place}'에 근무를 신청한 해설사가 아직 없습니다.")
-            
-            # 매트릭스 생성
+            if not display_users: st.warning("신청 내역이 없습니다.")
+
             matrix_data = []
             for d in target_dates:
                 d_obj = datetime.strptime(d, "%Y-%m-%d")
-                w_day = day_map[d_obj.weekday()]
-                
-                row = { "날짜": f"{d_obj.day}일 ({w_day})", "raw_date": d }
-                
-                active_count = 0
+                row = { "날짜": f"{d_obj.day}일 ({day_map[d_obj.weekday()]})", "raw_date": d }
+                cnt = 0
                 for u in display_users:
                     val = ""
                     if not place_plan_df.empty:
-                        check = place_plan_df[(place_plan_df['일자'] == d) & (place_plan_df['이름'] == u)]
-                        if not check.empty:
-                            val = check.iloc[0]['활동여부']
+                        check = place_plan_df[(place_plan_df['일자']==d) & (place_plan_df['이름']==u)]
+                        if not check.empty: val = check.iloc[0]['활동여부']
                     row[u] = val
-                    if val: active_count += 1
-                
-                row["인원"] = active_count
+                    if val: cnt += 1
+                row["인원"] = cnt
                 matrix_data.append(row)
 
-            matrix_df = pd.DataFrame(matrix_data)
+            col_config = { "날짜": st.column_config.TextColumn(disabled=True), "raw_date": None, "인원": st.column_config.NumberColumn(disabled=True) }
+            for u in display_users: col_config[u] = st.column_config.SelectboxColumn(label=u, options=shift_options, width="small")
 
-            # 에디터 설정
-            col_config = {
-                "날짜": st.column_config.TextColumn(disabled=True),
-                "raw_date": None,
-                "인원": st.column_config.NumberColumn(disabled=True)
-            }
-            for u in display_users:
-                col_config[u] = st.column_config.SelectboxColumn(label=u, options=shift_options, width="small")
+            edited_matrix = st.data_editor(pd.DataFrame(matrix_data), column_config=col_config, hide_index=True, use_container_width=True)
 
-            # [데이터 에디터 출력]
-            edited_matrix = st.data_editor(
-                matrix_df,
-                column_config=col_config,
-                hide_index=True,
-                use_container_width=True
-            )
-
-            # --- [하단 버튼 영역] ---
             c_btn1, c_btn2 = st.columns(2)
-            
-            # 1. 단순 저장 버튼
             with c_btn1:
-                if st.button("💾 변경사항 저장 (승인 X)"):
+                if st.button("💾 변경사항 임시 저장"):
                     save_rows = []
                     for _, row in edited_matrix.iterrows():
-                        d_real = row['raw_date']
                         for u in display_users:
                             status = row[u] if row[u] else ""
-                            # 상태는 기존 상태 유지하거나 빈값 (여기선 일단 '검토중' 의미로 빈값 유지)
-                            save_rows.append([p_year, p_month, d_real, current_island, target_place, u, status, "", "", str(datetime.now())]) # 상태=""
-                    
-                    if save_plan_data(save_rows):
-                        st.success("임시 저장되었습니다.")
-            
-            # 2. 승인 및 다운로드 버튼
+                            save_rows.append([p_year, p_month, row['raw_date'], current_island, target_place, u, status, "", "", str(datetime.now())])
+                    if save_plan_data(save_rows): st.success("저장됨")
+
             with c_btn2:
-                # --- PDF 생성 함수 포함 ---
                 from fpdf import FPDF
                 import os
 
                 def get_journal_records(year, month, island, place):
                     try:
                         sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
-                        data = sheet.get_all_records()
-                        df = pd.DataFrame(data)
+                        df = pd.DataFrame(sheet.get_all_records())
                         if df.empty: return pd.DataFrame()
                         df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-                        cond = ((df['날짜'].dt.year == year) & (df['날짜'].dt.month == month) & (df['섬'] == island) & (df['장소'] == place))
-                        return df[cond]
+                        return df[(df['날짜'].dt.year==year) & (df['날짜'].dt.month==month) & (df['섬']==island) & (df['장소']==place)]
                     except: return pd.DataFrame()
 
                 def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path): st.error("폰트 파일 없음"); return None
+                    
                     journal_df = get_journal_records(p_year, p_month, current_island, target_place)
                     current_users = display_users if display_users else ["(없음)"]
                     user_count = len(current_users)
@@ -885,143 +795,100 @@ else:
                     try: pdf.add_font("Nanum", "", font_path)
                     except: return None
 
-                    # 제목
                     pdf.set_font("Nanum", "", 22)
                     pdf.cell(0, 15, "지질공원 안내소 운영계획서", border=1, align="C", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
-                    
-                    # 정보란
-                    pdf.set_font("Nanum", "", 10); lh = 8; pdf.set_fill_color(240, 240, 240)
-                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True)
-                    pdf.cell(65, lh, str(target_place), border=1, align="L")
-                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True)
-                    pdf.cell(65, lh, str(special_note), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
-                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True)
-                    pdf.cell(65, lh, f"{p_year}년 {p_month}월", border=1, align="L")
-                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True)
-                    pdf.cell(65, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
 
-                    # 헤더
-                    w_date=10; w_day=10; w_remains=190-(w_date+w_day); w_section=w_remains/2; w_user=w_section/user_count
+                    pdf.set_font("Nanum", "", 10); lh=8; pdf.set_fill_color(240, 240, 240)
+                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True); pdf.cell(65, lh, str(target_place), border=1, align="L")
+                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True); pdf.cell(65, lh, str(special_note), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True); pdf.cell(65, lh, f"{p_year}년 {p_month}월", border=1, align="L")
+                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True); pdf.cell(65, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
+
+                    w_date=10; w_day=10; w_remains=190-(w_date+w_day); w_sec=w_remains/2; w_user=w_sec/user_count
                     pdf.set_fill_color(230, 230, 230); pdf.set_font("Nanum", "", 10)
-                    x_s=pdf.get_x(); y_s=pdf.get_y(); h_top=7; h_bot=7; h_tot=14
                     
+                    x=pdf.get_x(); y=pdf.get_y(); h_top=7; h_bot=7; h_tot=14
                     pdf.cell(w_date, h_tot, "일", border=1, align="C", fill=True)
-                    pdf.set_xy(x_s+w_date, y_s); pdf.cell(w_day, h_tot, "요일", border=1, align="C", fill=True)
-                    pdf.set_xy(x_s+w_date+w_day, y_s); pdf.cell(w_section, h_top, "활동 계획", border=1, align="C", fill=True)
-                    pdf.set_xy(x_s+w_date+w_day+w_section, y_s); pdf.cell(w_section, h_top, "활동 결과", border=1, align="C", fill=True)
-                    
-                    y_u=y_s+h_top; base_p=x_s+w_date+w_day; pdf.set_font("Nanum", "", 8)
+                    pdf.set_xy(x+w_date, y); pdf.cell(w_day, h_tot, "요일", border=1, align="C", fill=True)
+                    pdf.set_xy(x+w_date+w_day, y); pdf.cell(w_sec, h_top, "활동 계획", border=1, align="C", fill=True)
+                    pdf.set_xy(x+w_date+w_day+w_sec, y); pdf.cell(w_sec, h_top, "활동 결과", border=1, align="C", fill=True)
+
+                    y_u=y+h_top; base_p=x+w_date+w_day; base_r=base_p+w_sec; pdf.set_font("Nanum","",8)
                     for i,u in enumerate(current_users):
                         pdf.set_xy(base_p+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
-                    base_r=base_p+w_section
-                    for i,u in enumerate(current_users):
                         pdf.set_xy(base_r+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
-                    pdf.set_xy(x_s, y_s+h_tot)
+                    pdf.set_xy(x, y+h_tot)
 
-                    # 본문
                     row_h=8
                     for _, row in matrix_df.iterrows():
                         if pdf.get_y()>270: pdf.add_page(); pdf.set_y(10)
-                        y_c=pdf.get_y(); x_c=pdf.get_x(); d_str=row['raw_date']; d_obj=datetime.strptime(d_str, "%Y-%m-%d")
+                        x_c=pdf.get_x(); y_c=pdf.get_y(); d_str=row['raw_date']; d_obj=datetime.strptime(d_str, "%Y-%m-%d")
                         
                         pdf.set_xy(x_c, y_c); pdf.cell(w_date, row_h, str(d_obj.day), border=1, align="C")
                         pdf.set_xy(x_c+w_date, y_c); pdf.cell(w_day, row_h, day_map[d_obj.weekday()], border=1, align="C")
 
-                        # 데이터 준비
-                        plan_map = {}
-                        planners = []
+                        # 데이터 매칭
+                        plan_map={}; planners=[]
                         for u in current_users:
-                            s_t=row.get(u,""); plan_map[u]=""; 
-                            if s_t: 
-                                t_str=s_t.replace("오전(4시간)","오전").replace("오후(4시간)","오후").replace("4시간","4H").replace("8시간","8H")
-                                if "기타" in s_t: t_str="기타"
-                                plan_map[u]=t_str; planners.append(u)
+                            stt=row.get(u,""); t_str=""
+                            if stt:
+                                t_str=stt.replace("오전(4시간)","오전").replace("오후(4시간)","오후").replace("4시간","4H").replace("8시간","8H")
+                                if "기타" in stt: t_str="기타"
+                                planners.append(u)
+                            plan_map[u]=t_str
                         
-                        journal_entries = []
+                        j_entries=[]
                         if not journal_df.empty:
                             j_rows=journal_df[journal_df['날짜']==d_str]
-                            for _,jr in j_rows.iterrows(): journal_entries.append({"name":jr['이름'], "time":str(jr['활동시간'])+"H"})
+                            for _,jr in j_rows.iterrows(): j_entries.append({"n":jr['이름'], "t":str(jr['활동시간'])+"H"})
                         
-                        res_map = {}
-                        matched_idx = []
-                        # 1차 본인 매칭
-                        for i, ent in enumerate(journal_entries):
-                            if ent["name"] in current_users: res_map[ent["name"]]=ent["time"]; matched_idx.append(i)
-                        # 2차 대타 매칭
-                        unmatched = [e for i,e in enumerate(journal_entries) if i not in matched_idx]
-                        empty_slots = [u for u in planners if u not in res_map]
-                        for i in range(min(len(unmatched), len(empty_slots))):
-                            res_map[empty_slots[i]] = f"{unmatched[i]['name']}\n({unmatched[i]['time']})"
+                        res_map={}; matched=[]
+                        for k, ent in enumerate(j_entries):
+                            if ent["n"] in current_users: res_map[ent["n"]]=ent["t"]; matched.append(k)
+                        unmatched=[e for k,e in enumerate(j_entries) if k not in matched]
+                        empty=[u for u in planners if u not in res_map]
+                        for k in range(min(len(unmatched), len(empty))): res_map[empty[k]]=f"{unmatched[k]['n']}\n({unmatched[k]['t']})"
 
-                        # 출력
-                        base_p=x_c+w_date+w_day
+                        base_p=x_c+w_date+w_day; base_r=base_p+w_sec
                         for i,u in enumerate(current_users):
                             pdf.set_xy(base_p+(i*w_user), y_c); pdf.cell(w_user, row_h, plan_map.get(u,""), border=1, align="C")
-                        base_r=base_p+w_section
-                        for i,u in enumerate(current_users):
-                            cell_x=base_r+(i*w_user); txt=res_map.get(u,"")
-                            pdf.set_xy(cell_x, y_c)
+                            
+                            c_x=base_r+(i*w_user); txt=res_map.get(u,"")
+                            pdf.set_xy(c_x, y_c)
                             if "\n" in txt:
-                                pdf.set_font("Nanum","",7); pdf.set_xy(cell_x, y_c+1)
-                                pdf.multi_cell(w_user, 3, txt, border=0, align="C")
-                                pdf.set_xy(cell_x, y_c); pdf.rect(cell_x, y_c, w_user, row_h); pdf.set_font("Nanum","",8)
+                                pdf.set_font("Nanum","",7); pdf.set_xy(c_x, y_c+1); pdf.multi_cell(w_user, 3, txt, border=0, align="C")
+                                pdf.set_xy(c_x, y_c); pdf.rect(c_x, y_c, w_user, row_h); pdf.set_font("Nanum","",8)
                             else: pdf.cell(w_user, row_h, txt, border=1, align="C")
-                        
                         pdf.set_xy(x_c, y_c+row_h)
 
-                    # 서명
                     pdf.ln(5); pdf.set_font("Nanum","",12)
                     pdf.cell(95, 10, "조장 :                         (인/서명)", align="C")
                     pdf.cell(95, 10, "면 담당 :                         (인/서명)", align="C", new_x="LMARGIN", new_y="NEXT")
-                    pdf.ln(5); pdf.cell(0, 10, "20   .    .    .", align="R")
+                    # [삭제됨] 20 . . . 날짜 라인 삭제
                     return bytes(pdf.output())
 
-                # [승인 콜백 함수]
-                def approve_and_generate():
-                    # 1. DB에 '승인완료' 상태로 저장
-                    save_rows = []
-                    for _, row in edited_matrix.iterrows():
-                        d_real = row['raw_date']
+                def approve_callback():
+                    rows=[]
+                    for _, r in edited_matrix.iterrows():
                         for u in display_users:
-                            status = row[u] if row[u] else ""
-                            # 상태를 '승인완료'로 저장
-                            save_rows.append([p_year, p_month, d_real, current_island, target_place, u, status, "", "승인완료", str(datetime.now())])
-                    save_plan_data(save_rows)
-                    st.toast("✅ 계획이 승인 및 저장되었습니다!")
+                            rows.append([p_year, p_month, r['raw_date'], current_island, target_place, u, r[u] if r[u] else "", "", "승인완료", str(datetime.now())])
+                    save_plan_data(rows)
+                    st.toast("승인 완료!")
 
-                # PDF 데이터 미리 생성
                 pdf_data = create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users)
-
                 if pdf_data:
-                    # on_click으로 승인 저장 후 -> 다운로드 시작
-                    st.download_button(
-                        label="✅ 승인 및 운영계획서 다운로드",
-                        data=pdf_data,
-                        file_name=f"운영계획서_{target_place}_{p_month}월.pdf",
-                        mime="application/pdf",
-                        on_click=approve_and_generate # 클릭 시 승인 저장 실행
-                    )
-                else:
-                    st.warning("⚠️ PDF 생성 실패 (폰트 확인)")
-                    
+                    st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{p_month}월.pdf", "application/pdf", on_click=approve_callback)
+
         # =================================================
-        # 🟡 [화면 분기] 역할에 따른 화면 표시
+        # 🟡 [화면 분기] 역할에 따른 화면 표시 (수정됨)
         # =================================================
         if my_role == "해설사":
             render_my_plan_input("해설사", my_name)
+        elif my_role == "조장":
+            # 조장은 입력 + 승인 모두 필요
+            t1, t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
+            with t1: render_my_plan_input(my_role, my_name)
+            with t2: render_team_approval()
         else:
-            sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
-            with sub_t1: render_my_plan_input(my_role, my_name)
-            with sub_t2: render_team_approval()
-
-
-
-
-
-
-
-
-
-
-
-
+            # 관리자는 승인(조회)만 필요 (입력 탭 없음)
+            render_team_approval()
