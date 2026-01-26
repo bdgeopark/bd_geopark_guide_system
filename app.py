@@ -610,15 +610,12 @@ else:
                 except Exception as e: st.error(str(e))
 
 # -----------------------------------------------------
-    # 탭 3: 활동 계획 (최종 수정: 날짜 삭제 + 관리자 입력 제외)
+    # 탭 3: 활동 계획 (에러 수정 + PDF 헤더/문구 완벽 반영)
     # -----------------------------------------------------
     with tabs[2]: 
         st.header("🗓️ 안내소별 활동 계획 수립")
         
-        # 0. 한글 요일 변환 헬퍼
-        day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
-
-        # 1. 공통 설정
+        # 1. 공통 설정 (변수 정의)
         today = datetime.now()
         next_month_date = today.replace(day=28) + pd.Timedelta(days=4)
         default_year = next_month_date.year
@@ -629,7 +626,7 @@ else:
         with c_p2: p_month = st.number_input("활동 월", value=default_month)
         with c_p3: p_range = st.radio("활동 기간", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True)
 
-        # 날짜 리스트
+        # 날짜 리스트 생성
         _, last_day = calendar.monthrange(p_year, p_month)
         if "전반기" in p_range:
             target_dates = [datetime(p_year, p_month, d).strftime("%Y-%m-%d") for d in range(1, 16)]
@@ -648,11 +645,12 @@ else:
         # 🟢 [기능 1] 내 계획 입력 함수
         # =================================================
         def render_my_plan_input(role_name, user_name):
+            day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
             st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
+            
             selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
             st.info(f"👉 **{selected_place}** 근무 시간을 선택하세요. (기타 선택 시 시간 필수 입력)")
 
-            # 데이터 매핑
             input_data = []
             my_prev_data = {}
             if not plan_df.empty:
@@ -664,9 +662,10 @@ else:
             for d_str in target_dates:
                 d_obj = datetime.strptime(d_str, "%Y-%m-%d")
                 w_day = day_map[d_obj.weekday()]
-                db_val = my_prev_data.get(d_str, "")
                 
-                is_all = False; is_am = False; is_pm = False; is_etc = False; etc_text = ""
+                db_val = my_prev_data.get(d_str, "")
+                is_all=False; is_am=False; is_pm=False; is_etc=False; etc_text=""
+                
                 if db_val == "종일": is_all = True
                 elif "오전" in db_val: is_am = True
                 elif "오후" in db_val: is_pm = True
@@ -691,6 +690,7 @@ else:
                     },
                     hide_index=True, use_container_width=True, height=600
                 )
+
                 if st.form_submit_button("💾 내 계획 저장하기"):
                     save_rows = []
                     for _, row in edited_df.iterrows():
@@ -701,23 +701,28 @@ else:
                         elif row['기타']:
                             input_time = str(row['⏰ 시간입력']).strip()
                             status = input_time if input_time else "시간미정"
+                        
                         save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", "", str(datetime.now())])
                     
                     if save_plan_data(save_rows):
                         st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
 
         # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (승인+다운로드)
+        # 🔵 [기능 2] 조원 계획 승인 (에러 수정됨)
         # =================================================
-        def render_team_approval():
+        def render_team_approval(arg_year, arg_month, arg_range): # 인자 추가
+            day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
+            
+            # 현황판
             st.markdown("#### 📊 계획 제출 현황")
             users_in_island = get_users_by_island_cached(current_island)
+            
             submitted_users = set()
             if not plan_df.empty:
                 active_df = plan_df[plan_df['활동여부'] != ""]
                 submitted_users = set(active_df['이름'].unique())
-            not_submitted = [u for u in users_in_island if u not in submitted_users]
             
+            not_submitted = [u for u in users_in_island if u not in submitted_users]
             s1, s2 = st.columns(2)
             s1.success(f"제출: {', '.join(submitted_users) if submitted_users else '(없음)'}")
             s2.error(f"미제출: {', '.join(not_submitted) if not_submitted else '(완료)'}")
@@ -755,9 +760,11 @@ else:
                 row["인원"] = cnt
                 matrix_data.append(row)
 
+            # 에디터
             col_config = { "날짜": st.column_config.TextColumn(disabled=True), "raw_date": None, "인원": st.column_config.NumberColumn(disabled=True) }
             for u in display_users: col_config[u] = st.column_config.SelectboxColumn(label=u, options=shift_options, width="small")
 
+            # [중요] PDF 생성 시 사용할 최신 데이터
             edited_matrix = st.data_editor(pd.DataFrame(matrix_data), column_config=col_config, hide_index=True, use_container_width=True)
 
             c_btn1, c_btn2 = st.columns(2)
@@ -767,7 +774,7 @@ else:
                     for _, row in edited_matrix.iterrows():
                         for u in display_users:
                             status = row[u] if row[u] else ""
-                            save_rows.append([p_year, p_month, row['raw_date'], current_island, target_place, u, status, "", "", str(datetime.now())])
+                            save_rows.append([arg_year, arg_month, row['raw_date'], current_island, target_place, u, status, "", "", str(datetime.now())])
                     if save_plan_data(save_rows): st.success("저장됨")
 
             with c_btn2:
@@ -783,6 +790,7 @@ else:
                         return df[(df['날짜'].dt.year==year) & (df['날짜'].dt.month==month) & (df['섬']==island) & (df['장소']==place)]
                     except: return pd.DataFrame()
 
+                # PDF 생성 함수 (2단 헤더 적용: 이름 위, 시간 아래)
                 def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path): st.error("폰트 파일 없음"); return None
@@ -804,21 +812,28 @@ else:
                     pdf.cell(30, lh, "활동월", border=1, align="C", fill=True); pdf.cell(65, lh, f"{p_year}년 {p_month}월", border=1, align="L")
                     pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True); pdf.cell(65, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
 
+                    # [헤더 작성]
                     w_date=10; w_day=10; w_remains=190-(w_date+w_day); w_sec=w_remains/2; w_user=w_sec/user_count
                     pdf.set_fill_color(230, 230, 230); pdf.set_font("Nanum", "", 10)
                     
                     x=pdf.get_x(); y=pdf.get_y(); h_top=7; h_bot=7; h_tot=14
+                    
+                    # 1행: 일, 요일, 활동계획, 활동결과
                     pdf.cell(w_date, h_tot, "일", border=1, align="C", fill=True)
                     pdf.set_xy(x+w_date, y); pdf.cell(w_day, h_tot, "요일", border=1, align="C", fill=True)
                     pdf.set_xy(x+w_date+w_day, y); pdf.cell(w_sec, h_top, "활동 계획", border=1, align="C", fill=True)
                     pdf.set_xy(x+w_date+w_day+w_sec, y); pdf.cell(w_sec, h_top, "활동 결과", border=1, align="C", fill=True)
-
+                    
+                    # 2행: 해설사 이름들
                     y_u=y+h_top; base_p=x+w_date+w_day; base_r=base_p+w_sec; pdf.set_font("Nanum","",8)
                     for i,u in enumerate(current_users):
                         pdf.set_xy(base_p+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
                         pdf.set_xy(base_r+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
+                    
+                    # 커서 복귀
                     pdf.set_xy(x, y+h_tot)
 
+                    # [본문 작성] 시간만 표시
                     row_h=8
                     for _, row in matrix_df.iterrows():
                         if pdf.get_y()>270: pdf.add_page(); pdf.set_y(10)
@@ -827,15 +842,15 @@ else:
                         pdf.set_xy(x_c, y_c); pdf.cell(w_date, row_h, str(d_obj.day), border=1, align="C")
                         pdf.set_xy(x_c+w_date, y_c); pdf.cell(w_day, row_h, day_map[d_obj.weekday()], border=1, align="C")
 
-                        # 데이터 매칭
+                        # 데이터 준비
                         plan_map={}; planners=[]
                         for u in current_users:
                             stt=row.get(u,""); t_str=""
-                            if stt:
+                            if stt: 
                                 t_str=stt.replace("오전(4시간)","오전").replace("오후(4시간)","오후").replace("4시간","4H").replace("8시간","8H")
                                 if "기타" in stt: t_str="기타"
                                 planners.append(u)
-                            plan_map[u]=t_str
+                            plan_map[u]=t_str # 시간만 저장
                         
                         j_entries=[]
                         if not journal_df.empty:
@@ -849,46 +864,51 @@ else:
                         empty=[u for u in planners if u not in res_map]
                         for k in range(min(len(unmatched), len(empty))): res_map[empty[k]]=f"{unmatched[k]['n']}\n({unmatched[k]['t']})"
 
+                        # 출력
                         base_p=x_c+w_date+w_day; base_r=base_p+w_sec
                         for i,u in enumerate(current_users):
+                            # 계획: 시간만
                             pdf.set_xy(base_p+(i*w_user), y_c); pdf.cell(w_user, row_h, plan_map.get(u,""), border=1, align="C")
                             
+                            # 결과: 시간 (대타면 이름+시간)
                             c_x=base_r+(i*w_user); txt=res_map.get(u,"")
                             pdf.set_xy(c_x, y_c)
                             if "\n" in txt:
                                 pdf.set_font("Nanum","",7); pdf.set_xy(c_x, y_c+1); pdf.multi_cell(w_user, 3, txt, border=0, align="C")
                                 pdf.set_xy(c_x, y_c); pdf.rect(c_x, y_c, w_user, row_h); pdf.set_font("Nanum","",8)
                             else: pdf.cell(w_user, row_h, txt, border=1, align="C")
+                        
                         pdf.set_xy(x_c, y_c+row_h)
 
                     pdf.ln(5); pdf.set_font("Nanum","",12)
                     pdf.cell(95, 10, "조장 :                         (인/서명)", align="C")
                     pdf.cell(95, 10, "면 담당 :                         (인/서명)", align="C", new_x="LMARGIN", new_y="NEXT")
-                    # [삭제됨] 20 . . . 날짜 라인 삭제
                     return bytes(pdf.output())
 
                 def approve_callback():
                     rows=[]
                     for _, r in edited_matrix.iterrows():
                         for u in display_users:
-                            rows.append([p_year, p_month, r['raw_date'], current_island, target_place, u, r[u] if r[u] else "", "", "승인완료", str(datetime.now())])
+                            status = r[u] if r[u] else ""
+                            rows.append([arg_year, arg_month, r['raw_date'], current_island, target_place, u, status, "", "승인완료", str(datetime.now())])
                     save_plan_data(rows)
                     st.toast("승인 완료!")
 
-                pdf_data = create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users)
+                # PDF 생성 시 edited_matrix 사용 (편집된 내용 반영)
+                pdf_data = create_pdf(target_place, special_note, arg_year, arg_month, arg_range, edited_matrix, display_users)
+                
                 if pdf_data:
-                    st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{p_month}월.pdf", "application/pdf", on_click=approve_callback)
+                    st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{arg_month}월.pdf", "application/pdf", on_click=approve_callback)
 
         # =================================================
-        # 🟡 [화면 분기] 역할에 따른 화면 표시 (수정됨)
+        # 🟡 [화면 분기] 역할에 따른 화면 표시
         # =================================================
         if my_role == "해설사":
             render_my_plan_input("해설사", my_name)
         elif my_role == "조장":
-            # 조장은 입력 + 승인 모두 필요
             t1, t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with t1: render_my_plan_input(my_role, my_name)
-            with t2: render_team_approval()
+            with t2: render_team_approval(p_year, p_month, p_range) # 인자 전달
         else:
-            # 관리자는 승인(조회)만 필요 (입력 탭 없음)
-            render_team_approval()
+            # 관리자
+            render_team_approval(p_year, p_month, p_range) # 인자 전달
