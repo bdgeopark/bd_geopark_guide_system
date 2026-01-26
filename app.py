@@ -860,15 +860,16 @@ else:
             # [탭 3 내부 - 버튼 영역 수정]
             with c_btn2:
                 # ---------------------------------------------------------
-                # [기능 3] 서버에서 직접 PDF 파일 생성 및 다운로드 (fpdf2)
+                # [기능 3] PDF 생성 및 다운로드 (들여쓰기 수정됨)
                 # ---------------------------------------------------------
-                
-                # PDF 생성 함수 정의 (한글 폰트 필수)
-def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
-                    # 1. 폰트 파일 존재 여부 먼저 체크
+                from fpdf import FPDF # 맨 위에 import 되어 있어야 하지만, 안전을 위해 여기 둠
+                import os
+
+                # 함수 정의가 'with' 문보다 안쪽으로 들어와야 합니다! (Tab)
+                def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
+                    # 1. 폰트 파일 존재 여부 체크
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path):
-                        st.error(f"❌ 폰트 파일을 찾을 수 없습니다. (경로: {os.path.abspath(font_path)})")
                         return None
                         
                     pdf = FPDF()
@@ -878,8 +879,7 @@ def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, 
                     try:
                         pdf.add_font("Nanum", "", font_path)
                         pdf.set_font("Nanum", "", 12)
-                    except Exception as e:
-                        st.error(f"폰트 등록 중 오류: {e}")
+                    except:
                         return None
 
                     # --- PDF 내용 작성 ---
@@ -935,7 +935,7 @@ def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, 
                             pdf.cell(20, 10, day_num, border=1, align="C")
                             pdf.cell(20, 10, day_str, border=1, align="C")
                             
-                            # 근무자 명단 출력 (긴 경우 대비해 cell 유지)
+                            # 근무자 명단 출력
                             pdf.set_xy(curr_x + 40, curr_y) 
                             pdf.cell(75, 10, workers_str, border=1, align="L")
                             
@@ -951,23 +951,25 @@ def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, 
                         pdf.set_font("Nanum", "", 12)
                         pdf.cell(0, 10, "20   .    .    .", align="R")
 
-                        # ★ [핵심 수정] bytearray -> bytes 로 변환하여 반환
                         return bytes(pdf.output())
 
                     except Exception as e:
-                        st.error(f"PDF 생성 중 오류 발생: {e}")
+                        st.error(f"오류: {e}")
                         return None
 
-                # 버튼 표시
+                # 버튼 표시 로직도 'with' 안쪽 레벨에 있어야 함
                 pdf_data = create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users)
                 
                 if pdf_data:
                     st.download_button(
                         label="📥 운영계획서 PDF 다운로드",
-                        data=pdf_data, # 이제 bytes 형식이므로 에러가 나지 않습니다.
+                        data=pdf_data,
                         file_name=f"운영계획서_{target_place}_{p_month}월.pdf",
                         mime="application/pdf"
                     )
+                else:
+                    st.warning("폰트 파일(NanumGothic.ttf)이 없거나 오류가 발생했습니다.")
+
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
         # =================================================
@@ -977,6 +979,7 @@ def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, 
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
 
 
 
