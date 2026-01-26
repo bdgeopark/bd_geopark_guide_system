@@ -8,6 +8,8 @@ import calendar
 import requests
 from urllib.parse import unquote
 from collections import Counter
+from fpdf import FPDF
+import io
 
 # =========================================================
 # 🔽 [설정] 고정값 (API키 & 항로코드) - 보안 적용됨
@@ -855,76 +857,64 @@ else:
                     if save_plan_data(save_rows):
                         st.success("배치표가 수정되었습니다.")
             
+            # [탭 3 내부 - 버튼 영역 수정]
             with c_btn2:
-                if st.button("🖨️ 운영계획서 출력 보기"):
-                    st.divider()
+                # ---------------------------------------------------------
+                # [기능 3] 서버에서 직접 PDF 파일 생성 및 다운로드 (fpdf2)
+                # ---------------------------------------------------------
+                
+                # PDF 생성 함수 정의 (한글 폰트 필수)
+                def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
+                    pdf = FPDF()
+                    pdf.add_page()
                     
-                    # ---------------------------------------------------------
-                    # 1. [CSS 수정] 인쇄 시 깔끔하게 나오도록 강력한 스타일 적용
-                    # ---------------------------------------------------------
-                    st.markdown("""
-                        <style>
-                            /* 화면에 보일 때 스타일 */
-                            .print-layout {
-                                font-family: "Malgun Gothic", sans-serif;
-                                border: 2px solid #000;
-                                padding: 30px;
-                                background-color: white;
-                                color: black;
-                                margin-top: 20px;
-                            }
-                            
-                            /* 테이블 스타일 */
-                            .info-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-                            .info-tbl td { border: 1px solid #000; padding: 8px; font-size: 14px; }
-                            .main-tbl { width: 100%; border-collapse: collapse; text-align: center; }
-                            .main-tbl th { border: 1px solid #000; padding: 8px; background-color: #f0f0f0; font-weight: bold; font-size: 14px; }
-                            .main-tbl td { border: 1px solid #000; padding: 6px; height: 30px; font-size: 13px; }
-                            
-                            /* 서명란 */
-                            .sig-box { margin-top: 30px; display: flex; justify-content: space-around; font-size: 16px; }
+                    # 1. 한글 폰트 등록 (파일이 같은 폴더에 있어야 함)
+                    font_path = "NanumGothic.ttf" # 폰트 파일명
+                    try:
+                        pdf.add_font("Nanum", "", font_path)
+                        pdf.set_font("Nanum", "", 12)
+                    except:
+                        st.error(f"❌ '{font_path}' 폰트 파일을 찾을 수 없습니다. GitHub에 업로드했는지 확인하세요.")
+                        return None
 
-                            /* 🖨️ [인쇄 모드] - 이 부분이 핵심입니다 */
-                            @media print {
-                                /* 1. 브라우저 기본 머리말/꼬리말 제거 */
-                                @page { margin: 10mm; size: A4; }
-                                
-                                /* 2. 모든 Streamlit UI 요소 숨기기 */
-                                header, footer, aside, .stApp > header, [data-testid="stSidebar"], .stDeployButton, div[data-testid="stDecoration"] {
-                                    display: none !important;
-                                }
-                                
-                                /* 3. 배경을 흰색으로 덮어씌우고 내용물만 표시 */
-                                body {
-                                    visibility: hidden;
-                                    background-color: white;
-                                }
-                                
-                                /* 4. 우리가 만든 보고서 영역만 보이게 설정 및 위치 고정 */
-                                .print-layout, .print-layout * {
-                                    visibility: visible !important;
-                                }
-                                .print-layout {
-                                    position: absolute !important;
-                                    top: 0 !important;
-                                    left: 0 !important;
-                                    width: 100% !important;
-                                    border: 2px solid #000 !important;
-                                    margin: 0 !important;
-                                    padding: 20px !important;
-                                }
-                            }
-                        </style>
-                    """, unsafe_allow_html=True)
+                    # 2. 제목 박스
+                    pdf.set_font("Nanum", "", 24)
+                    pdf.cell(0, 15, "지질공원 안내소 운영계획서", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                    pdf.ln(10)
 
-                    # ---------------------------------------------------------
-                    # 2. [HTML 생성 로직 수정] 문자열 꼬임 방지
-                    # ---------------------------------------------------------
+                    # 3. 정보 테이블 (상단)
+                    pdf.set_font("Nanum", "", 12)
                     
-                    # (1) 테이블의 행(Row)들을 먼저 리스트로 만듭니다. (에러 원인 해결)
-                    rows_html_list = []
+                    # 행 높이 설정
+                    lh = 10 
                     
-                    for _, row in edited_matrix.iterrows():
+                    # 첫 번째 줄 (안내소, 특이사항)
+                    pdf.set_fill_color(249, 249, 249) # 연한 회색 배경
+                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True)
+                    pdf.cell(65, lh, target_place, border=1, align="L")
+                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True)
+                    pdf.cell(65, lh, special_note, border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    
+                    # 두 번째 줄 (활동월, 활동기간)
+                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True)
+                    pdf.cell(65, lh, f"{p_year}년 {p_month}월", border=1, align="L")
+                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True)
+                    pdf.cell(65, lh, p_range, border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    
+                    pdf.ln(5)
+
+                    # 4. 메인 테이블 (근무표)
+                    # 헤더
+                    pdf.set_fill_color(240, 240, 240)
+                    pdf.set_font("Nanum", "", 12)
+                    pdf.cell(20, 10, "일", border=1, align="C", fill=True)
+                    pdf.cell(20, 10, "요일", border=1, align="C", fill=True)
+                    pdf.cell(75, 10, "활동 계획 (근무자)", border=1, align="C", fill=True)
+                    pdf.cell(75, 10, "활동 결과", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+
+                    # 데이터 행
+                    pdf.set_font("Nanum", "", 11)
+                    for _, row in matrix_df.iterrows():
                         d_obj = datetime.strptime(row['raw_date'], "%Y-%m-%d")
                         day_num = f"{d_obj.day}일"
                         day_str = day_map[d_obj.weekday()]
@@ -935,65 +925,52 @@ else:
                             if s_type:
                                 if s_type == "종일": workers.append(f"{u}")
                                 else: workers.append(f"{u}({s_type})")
-                        
                         workers_str = ", ".join(workers) if workers else ""
-                        
-                        # 행 하나 생성
-                        row_html = f"""
-                            <tr>
-                                <td>{day_num}</td>
-                                <td>{day_str}</td>
-                                <td style="text-align: left; padding-left: 10px;">{workers_str}</td>
-                                <td></td>
-                            </tr>
-                        """
-                        rows_html_list.append(row_html)
-                    
-                    # (2) 리스트를 하나의 문자열로 합칩니다.
-                    all_rows_html = "".join(rows_html_list)
 
-                    # (3) 전체 HTML 틀 안에 합친 행을 집어넣습니다.
-                    final_html = f"""
-                    <div class="print-layout">
-                        <div style="text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; border: 2px solid #000; padding: 10px;">
-                            지질공원 안내소 운영계획서
-                        </div>
+                        # 셀 높이 자동 조절 (내용이 길 경우 대비)
+                        x_start = pdf.get_x()
+                        y_start = pdf.get_y()
                         
-                        <table class="info-tbl">
-                            <tr>
-                                <td style="width: 15%; background-color: #f9f9f9; text-align: center; font-weight: bold;">안내소</td>
-                                <td style="width: 35%;">{target_place}</td>
-                                <td style="width: 15%; background-color: #f9f9f9; text-align: center; font-weight: bold;">특이사항</td>
-                                <td>{special_note}</td>
-                            </tr>
-                            <tr>
-                                <td style="background-color: #f9f9f9; text-align: center; font-weight: bold;">활동월</td>
-                                <td>{p_year}년 {p_month}월</td>
-                                <td style="background-color: #f9f9f9; text-align: center; font-weight: bold;">활동기간</td>
-                                <td>{p_range}</td>
-                            </tr>
-                        </table>
+                        # 날짜/요일 (높이 10 고정)
+                        pdf.cell(20, 10, day_num, border=1, align="C")
+                        pdf.cell(20, 10, day_str, border=1, align="C")
+                        
+                        # 근무자 (MultiCell로 줄바꿈 지원)
+                        # 위치 조정
+                        curr_x = pdf.get_x()
+                        curr_y = pdf.get_y()
+                        pdf.multi_cell(75, 10, workers_str, border=1, align="L")
+                        # 높이 맞추기 위해 커서 복귀 로직이 필요하지만, 여기선 간단히 고정 높이 처리
+                        # (복잡한 레이아웃 회피를 위해 한 줄로 가정하거나 10 높이 고정)
+                        
+                        # 결과 (빈칸)
+                        pdf.set_xy(curr_x + 75, curr_y)
+                        pdf.cell(75, 10, "", border=1, new_x="LMARGIN", new_y="NEXT")
 
-                        <table class="main-tbl">
-                            <tr>
-                                <th style="width: 8%;">일</th>
-                                <th style="width: 8%;">요일</th>
-                                <th style="width: 42%;">활동 계획 (근무자)</th>
-                                <th style="width: 42%;">활동 결과</th>
-                            </tr>
-                            {all_rows_html} 
-                        </table>
-                        
-                        <div class="sig-box">
-                            <div>조장 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
-                            <div>면 담당 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
-                        </div>
-                        <div style="text-align: right; margin-top: 10px; font-size: 14px;">20&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.</div>
-                    </div>
-                    """
+                    pdf.ln(15)
+
+                    # 5. 서명란
+                    pdf.set_font("Nanum", "", 14)
+                    y_sig = pdf.get_y()
+                    pdf.cell(95, 10, "조장 :                         (인/서명)", align="C")
+                    pdf.cell(95, 10, "면 담당 :                         (인/서명)", align="C", new_x="LMARGIN", new_y="NEXT")
                     
-                    st.markdown(final_html, unsafe_allow_html=True)
-                    st.info("💡 마우스 우클릭 -> '인쇄' (단축키 Ctrl+P)")
+                    pdf.ln(10)
+                    pdf.set_font("Nanum", "", 12)
+                    pdf.cell(0, 10, "20   .    .    .", align="R")
+
+                    return pdf.output()
+
+                # 다운로드 버튼 표시
+                pdf_byte = create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users)
+                
+                if pdf_byte:
+                    st.download_button(
+                        label="📥 운영계획서 PDF 다운로드",
+                        data=pdf_byte,
+                        file_name=f"운영계획서_{target_place}_{p_month}월.pdf",
+                        mime="application/pdf"
+                    )
 
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
@@ -1004,6 +981,7 @@ else:
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
 
 
 
