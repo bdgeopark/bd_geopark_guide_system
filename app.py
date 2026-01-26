@@ -858,20 +858,70 @@ else:
             with c_btn2:
                 if st.button("🖨️ 운영계획서 출력 보기"):
                     st.divider()
-                    # HTML 스타일
+                    
+                    # ---------------------------------------------------------
+                    # [수정됨] 인쇄 전용 스타일(CSS) 강력 적용
+                    # ---------------------------------------------------------
                     st.markdown("""
                     <style>
-                    .report-container { font-family: "Malgun Gothic", sans-serif; border: 2px solid #000; padding: 30px; background-color: white; color: black; }
-                    .report-title { text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; border: 2px solid #000; padding: 10px; }
+                    /* 1. 화면에 보일 때 스타일 (기존과 동일) */
+                    .report-container {
+                        font-family: "Malgun Gothic", sans-serif;
+                        border: 2px solid #000;
+                        padding: 30px;
+                        background-color: white;
+                        color: black;
+                        margin-bottom: 50px; /* 하단 여백 */
+                    }
+                    .report-title {
+                        text-align: center;
+                        font-size: 24px;
+                        font-weight: bold;
+                        margin-bottom: 20px;
+                        border: 2px solid #000;
+                        padding: 10px;
+                    }
                     .info-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
                     .info-table td { border: 1px solid #000; padding: 8px; font-size: 16px; }
+                    
                     .main-table { width: 100%; border-collapse: collapse; text-align: center; }
                     .main-table th { border: 1px solid #000; padding: 10px; background-color: #f0f0f0; font-weight: bold; }
                     .main-table td { border: 1px solid #000; padding: 8px; height: 35px; }
+                    
                     .signature-section { margin-top: 30px; display: flex; justify-content: space-around; font-size: 18px; }
+
+                    /* 2. 🖨️ 인쇄할 때만 적용되는 '마법' 스타일 (@media print) */
+                    @media print {
+                        /* (1) 모든 요소 숨기기 */
+                        body * {
+                            visibility: hidden;
+                        }
+                        
+                        /* (2) 스트림릿 UI (헤더, 푸터, 사이드바) 아예 없애기 */
+                        header, footer, [data-testid="stSidebar"], .stButton, .stApp > header {
+                            display: none !important;
+                        }
+
+                        /* (3) 오직 '보고서(report-container)'만 보이게 설정 */
+                        .report-container, .report-container * {
+                            visibility: visible !important;
+                        }
+
+                        /* (4) 보고서를 종이 맨 위로 끌어올리기 */
+                        .report-container {
+                            position: absolute !important;
+                            left: 0 !important;
+                            top: 0 !important;
+                            width: 100% !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            border: 2px solid #000 !important; /* 테두리 유지 */
+                        }
+                    }
                     </style>
                     """, unsafe_allow_html=True)
                     
+                    # HTML 본문 생성 (내용은 동일)
                     html = f"""
                     <div class="report-container">
                         <div class="report-title">지질공원 안내소 운영계획서</div>
@@ -931,7 +981,9 @@ else:
                     </div>
                     """
                     st.markdown(html, unsafe_allow_html=True)
-                    st.info("💡 마우스 우클릭 -> 인쇄 -> PDF 저장")
+                    
+                    # 안내 메시지
+                    st.info("💡 이제 마우스 우클릭 -> '인쇄'를 누르시면 문서 양식만 깔끔하게 나옵니다.")
 
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
@@ -942,5 +994,6 @@ else:
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
 
 
