@@ -860,72 +860,106 @@ else:
                     st.divider()
                     
                     # ---------------------------------------------------------
-                    # [수정됨] 인쇄 전용 스타일(CSS) 강력 적용
+                    # 1. [CSS 수정] 인쇄 시 깔끔하게 나오도록 강력한 스타일 적용
                     # ---------------------------------------------------------
                     st.markdown("""
-                    <style>
-                    /* 1. 화면에 보일 때 스타일 (기존과 동일) */
-                    .report-container {
-                        font-family: "Malgun Gothic", sans-serif;
-                        border: 2px solid #000;
-                        padding: 30px;
-                        background-color: white;
-                        color: black;
-                        margin-bottom: 50px; /* 하단 여백 */
-                    }
-                    .report-title {
-                        text-align: center;
-                        font-size: 24px;
-                        font-weight: bold;
-                        margin-bottom: 20px;
-                        border: 2px solid #000;
-                        padding: 10px;
-                    }
-                    .info-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-                    .info-table td { border: 1px solid #000; padding: 8px; font-size: 16px; }
-                    
-                    .main-table { width: 100%; border-collapse: collapse; text-align: center; }
-                    .main-table th { border: 1px solid #000; padding: 10px; background-color: #f0f0f0; font-weight: bold; }
-                    .main-table td { border: 1px solid #000; padding: 8px; height: 35px; }
-                    
-                    .signature-section { margin-top: 30px; display: flex; justify-content: space-around; font-size: 18px; }
+                        <style>
+                            /* 화면에 보일 때 스타일 */
+                            .print-layout {
+                                font-family: "Malgun Gothic", sans-serif;
+                                border: 2px solid #000;
+                                padding: 30px;
+                                background-color: white;
+                                color: black;
+                                margin-top: 20px;
+                            }
+                            
+                            /* 테이블 스타일 */
+                            .info-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+                            .info-tbl td { border: 1px solid #000; padding: 8px; font-size: 14px; }
+                            .main-tbl { width: 100%; border-collapse: collapse; text-align: center; }
+                            .main-tbl th { border: 1px solid #000; padding: 8px; background-color: #f0f0f0; font-weight: bold; font-size: 14px; }
+                            .main-tbl td { border: 1px solid #000; padding: 6px; height: 30px; font-size: 13px; }
+                            
+                            /* 서명란 */
+                            .sig-box { margin-top: 30px; display: flex; justify-content: space-around; font-size: 16px; }
 
-                    /* 2. 🖨️ 인쇄할 때만 적용되는 '마법' 스타일 (@media print) */
-                    @media print {
-                        /* (1) 모든 요소 숨기기 */
-                        body * {
-                            visibility: hidden;
-                        }
-                        
-                        /* (2) 스트림릿 UI (헤더, 푸터, 사이드바) 아예 없애기 */
-                        header, footer, [data-testid="stSidebar"], .stButton, .stApp > header {
-                            display: none !important;
-                        }
-
-                        /* (3) 오직 '보고서(report-container)'만 보이게 설정 */
-                        .report-container, .report-container * {
-                            visibility: visible !important;
-                        }
-
-                        /* (4) 보고서를 종이 맨 위로 끌어올리기 */
-                        .report-container {
-                            position: absolute !important;
-                            left: 0 !important;
-                            top: 0 !important;
-                            width: 100% !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            border: 2px solid #000 !important; /* 테두리 유지 */
-                        }
-                    }
-                    </style>
+                            /* 🖨️ [인쇄 모드] - 이 부분이 핵심입니다 */
+                            @media print {
+                                /* 1. 브라우저 기본 머리말/꼬리말 제거 */
+                                @page { margin: 10mm; size: A4; }
+                                
+                                /* 2. 모든 Streamlit UI 요소 숨기기 */
+                                header, footer, aside, .stApp > header, [data-testid="stSidebar"], .stDeployButton, div[data-testid="stDecoration"] {
+                                    display: none !important;
+                                }
+                                
+                                /* 3. 배경을 흰색으로 덮어씌우고 내용물만 표시 */
+                                body {
+                                    visibility: hidden;
+                                    background-color: white;
+                                }
+                                
+                                /* 4. 우리가 만든 보고서 영역만 보이게 설정 및 위치 고정 */
+                                .print-layout, .print-layout * {
+                                    visibility: visible !important;
+                                }
+                                .print-layout {
+                                    position: absolute !important;
+                                    top: 0 !important;
+                                    left: 0 !important;
+                                    width: 100% !important;
+                                    border: 2px solid #000 !important;
+                                    margin: 0 !important;
+                                    padding: 20px !important;
+                                }
+                            }
+                        </style>
                     """, unsafe_allow_html=True)
+
+                    # ---------------------------------------------------------
+                    # 2. [HTML 생성 로직 수정] 문자열 꼬임 방지
+                    # ---------------------------------------------------------
                     
-                    # HTML 본문 생성 (내용은 동일)
-                    html = f"""
-                    <div class="report-container">
-                        <div class="report-title">지질공원 안내소 운영계획서</div>
-                        <table class="info-table">
+                    # (1) 테이블의 행(Row)들을 먼저 리스트로 만듭니다. (에러 원인 해결)
+                    rows_html_list = []
+                    
+                    for _, row in edited_matrix.iterrows():
+                        d_obj = datetime.strptime(row['raw_date'], "%Y-%m-%d")
+                        day_num = f"{d_obj.day}일"
+                        day_str = day_map[d_obj.weekday()]
+                        
+                        workers = []
+                        for u in display_users:
+                            s_type = row[u]
+                            if s_type:
+                                if s_type == "종일": workers.append(f"{u}")
+                                else: workers.append(f"{u}({s_type})")
+                        
+                        workers_str = ", ".join(workers) if workers else ""
+                        
+                        # 행 하나 생성
+                        row_html = f"""
+                            <tr>
+                                <td>{day_num}</td>
+                                <td>{day_str}</td>
+                                <td style="text-align: left; padding-left: 10px;">{workers_str}</td>
+                                <td></td>
+                            </tr>
+                        """
+                        rows_html_list.append(row_html)
+                    
+                    # (2) 리스트를 하나의 문자열로 합칩니다.
+                    all_rows_html = "".join(rows_html_list)
+
+                    # (3) 전체 HTML 틀 안에 합친 행을 집어넣습니다.
+                    final_html = f"""
+                    <div class="print-layout">
+                        <div style="text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; border: 2px solid #000; padding: 10px;">
+                            지질공원 안내소 운영계획서
+                        </div>
+                        
+                        <table class="info-tbl">
                             <tr>
                                 <td style="width: 15%; background-color: #f9f9f9; text-align: center; font-weight: bold;">안내소</td>
                                 <td style="width: 35%;">{target_place}</td>
@@ -939,51 +973,27 @@ else:
                                 <td>{p_range}</td>
                             </tr>
                         </table>
-                        <table class="main-table">
+
+                        <table class="main-tbl">
                             <tr>
-                                <th style="width: 10%;">일</th>
-                                <th style="width: 10%;">요일</th>
-                                <th style="width: 40%;">활동 계획 (근무자)</th>
-                                <th style="width: 40%;">활동 결과</th>
+                                <th style="width: 8%;">일</th>
+                                <th style="width: 8%;">요일</th>
+                                <th style="width: 42%;">활동 계획 (근무자)</th>
+                                <th style="width: 42%;">활동 결과</th>
                             </tr>
-                    """
-                    
-                    for _, row in edited_matrix.iterrows():
-                        d_obj = datetime.strptime(row['raw_date'], "%Y-%m-%d")
-                        day_num = f"{d_obj.day}일"
-                        day_str = day_map[d_obj.weekday()] # 한글 요일
-                        
-                        workers = []
-                        for u in display_users:
-                            s_type = row[u]
-                            if s_type:
-                                if s_type == "종일": workers.append(f"{u}")
-                                else: workers.append(f"{u}({s_type})")
-                        
-                        workers_str = ", ".join(workers) if workers else ""
-                        
-                        html += f"""
-                            <tr>
-                                <td>{day_num}</td>
-                                <td>{day_str}</td>
-                                <td style="text-align: left; padding-left: 10px;">{workers_str}</td>
-                                <td></td>
-                            </tr>
-                        """
-                    
-                    html += """
+                            {all_rows_html} 
                         </table>
-                        <div class="signature-section">
+                        
+                        <div class="sig-box">
                             <div>조장 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
                             <div>면 담당 : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(인/서명)</div>
                         </div>
-                        <div style="text-align: right; margin-top: 10px;">20&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.</div>
+                        <div style="text-align: right; margin-top: 10px; font-size: 14px;">20&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.&nbsp;&nbsp;&nbsp;&nbsp;.</div>
                     </div>
                     """
-                    st.markdown(html, unsafe_allow_html=True)
                     
-                    # 안내 메시지
-                    st.info("💡 이제 마우스 우클릭 -> '인쇄'를 누르시면 문서 양식만 깔끔하게 나옵니다.")
+                    st.markdown(final_html, unsafe_allow_html=True)
+                    st.info("💡 마우스 우클릭 -> '인쇄' (단축키 Ctrl+P)")
 
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
@@ -994,6 +1004,7 @@ else:
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
 
 
 
