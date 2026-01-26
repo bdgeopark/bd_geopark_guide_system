@@ -641,16 +641,16 @@ else:
         st.divider()
 
         # =================================================
-        # 🟢 [기능 1] 내 계획 입력 함수 (한글 요일 적용)
+        # 🟢 [기능 1] 내 계획 입력 함수 (체크박스 + 모바일 최적화)
         # =================================================
         def render_my_plan_input(role_name, user_name):
             st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
             
             # 1. 안내소 선택
             selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
-            st.info(f"👉 **{selected_place}** 근무 일정을 입력하세요.")
+            st.info(f"👉 **{selected_place}**에서 활동할 날짜에 체크하세요.")
 
-            # 2. 데이터 매핑
+            # 2. 데이터 매핑 (기존 데이터 불러오기)
             input_data = []
             my_prev_data = {}
             
@@ -664,25 +664,30 @@ else:
                 d_obj = datetime.strptime(d_str, "%Y-%m-%d")
                 w_day = day_map[d_obj.weekday()] # 한글 요일
                 
+                # 기존 값이 있으면 True, 없으면 False
                 current_val = my_prev_data.get(d_str, "")
-                if current_val == "O": current_val = "종일" 
+                is_checked = True if current_val else False
                 
                 input_data.append({
                     "날짜": d_str,
                     "요일": w_day,
-                    "근무형태": current_val
+                    "활동여부": is_checked # True/False로 변환
                 })
             
             input_df = pd.DataFrame(input_data)
 
-            # 3. 데이터 에디터
+            # 3. 데이터 에디터 (체크박스 적용)
             with st.form("my_plan_form"):
                 edited_df = st.data_editor(
                     input_df,
                     column_config={
                         "날짜": st.column_config.TextColumn(disabled=True),
                         "요일": st.column_config.TextColumn(disabled=True),
-                        "근무형태": st.column_config.SelectboxColumn("근무 선택", options=shift_options, required=True)
+                        # [수정] 체크박스로 변경 & 명칭 '활동 시간'으로 변경
+                        "활동여부": st.column_config.CheckboxColumn(
+                            "활동 시간",
+                            default=False
+                        )
                     },
                     hide_index=True,
                     use_container_width=True,
@@ -692,7 +697,10 @@ else:
                 if st.form_submit_button("💾 내 계획 저장하기"):
                     save_rows = []
                     for _, row in edited_df.iterrows():
-                        save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, row['근무형태'], "", str(datetime.now())])
+                        # 체크되었으면 "종일", 아니면 ""(빈값)으로 저장
+                        status = "종일" if row['활동여부'] else ""
+                        
+                        save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", str(datetime.now())])
                     
                     if save_plan_data(save_rows):
                         st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
@@ -895,3 +903,4 @@ else:
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
