@@ -641,16 +641,16 @@ else:
         st.divider()
 
         # =================================================
-        # 🟢 [기능 1] 내 계획 입력 함수 (체크박스 + 모바일 최적화)
+        # 🟢 [기능 1] 내 계획 입력 함수 (4개 체크박스 + 시간입력)
         # =================================================
         def render_my_plan_input(role_name, user_name):
             st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
             
             # 1. 안내소 선택
             selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
-            st.info(f"👉 **{selected_place}**에서 활동할 날짜에 체크하세요.")
+            st.info(f"👉 **{selected_place}** 근무 시간을 선택하세요. (기타 선택 시 시간 필수 입력)")
 
-            # 2. 데이터 매핑 (기존 데이터 불러오기)
+            # 2. 데이터 매핑 (기존 데이터 불러와서 체크박스 상태로 변환)
             input_data = []
             my_prev_data = {}
             
@@ -664,29 +664,54 @@ else:
                 d_obj = datetime.strptime(d_str, "%Y-%m-%d")
                 w_day = day_map[d_obj.weekday()] # 한글 요일
                 
-                # 기존 값이 있으면 True, 없으면 False
-                current_val = my_prev_data.get(d_str, "")
-                is_checked = True if current_val else False
+                # 기존 DB 값 가져오기
+                db_val = my_prev_data.get(d_str, "")
                 
+                # 체크박스 상태 초기화
+                is_all = False
+                is_am = False
+                is_pm = False
+                is_etc = False
+                etc_text = ""
+
+                # DB 값에 따라 어떤 체크박스를 켤지 결정
+                if db_val == "종일":
+                    is_all = True
+                elif "오전" in db_val:
+                    is_am = True
+                elif "오후" in db_val:
+                    is_pm = True
+                elif db_val != "": # 비어있지 않은데 위의 키워드가 없으면 '기타'로 간주
+                    is_etc = True
+                    etc_text = db_val
+
                 input_data.append({
                     "날짜": d_str,
                     "요일": w_day,
-                    "활동여부": is_checked # True/False로 변환
+                    "종일": is_all,
+                    "오전": is_am,
+                    "오후": is_pm,
+                    "기타": is_etc,
+                    "⏰ 시간입력": etc_text # 기타일 때 입력할 텍스트
                 })
             
             input_df = pd.DataFrame(input_data)
 
-            # 3. 데이터 에디터 (체크박스 적용)
+            # 3. 데이터 에디터 (체크박스 4개 + 텍스트 1개)
             with st.form("my_plan_form"):
                 edited_df = st.data_editor(
                     input_df,
                     column_config={
                         "날짜": st.column_config.TextColumn(disabled=True),
                         "요일": st.column_config.TextColumn(disabled=True),
-                        # [수정] 체크박스로 변경 & 명칭 '활동 시간'으로 변경
-                        "활동여부": st.column_config.CheckboxColumn(
-                            "활동 시간",
-                            default=False
+                        "종일": st.column_config.CheckboxColumn("종일", default=False),
+                        "오전": st.column_config.CheckboxColumn("오전", default=False),
+                        "오후": st.column_config.CheckboxColumn("오후", default=False),
+                        "기타": st.column_config.CheckboxColumn("기타", default=False),
+                        "⏰ 시간입력": st.column_config.TextColumn(
+                            "⏰ 시간(기타)", 
+                            help="기타 체크 시 활동 시간을 입력하세요 (예: 13:00~15:00)",
+                            default=""
                         )
                     },
                     hide_index=True,
@@ -694,12 +719,26 @@ else:
                     height=600
                 )
 
+                st.caption("※ 여러 개를 동시에 체크할 경우 [종일 > 오전 > 오후 > 기타] 순서로 하나만 저장됩니다.")
+
                 if st.form_submit_button("💾 내 계획 저장하기"):
                     save_rows = []
                     for _, row in edited_df.iterrows():
-                        # 체크되었으면 "종일", 아니면 ""(빈값)으로 저장
-                        status = "종일" if row['활동여부'] else ""
-                        
+                        # 저장 로직: 체크박스 우선순위 적용
+                        status = ""
+                        if row['종일']:
+                            status = "종일"
+                        elif row['오전']:
+                            status = "오전(4시간)"
+                        elif row['오후']:
+                            status = "오후(4시간)"
+                        elif row['기타']:
+                            # 기타를 체크했는데 시간 입력이 없으면 경고 대신 "시간미정" 등으로 처리하거나 빈값 유지
+                            input_time = str(row['⏰ 시간입력']).strip()
+                            status = input_time if input_time else "시간미정"
+                        else:
+                            status = "" # 아무것도 체크 안 함 -> 근무 없음
+
                         save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", str(datetime.now())])
                     
                     if save_plan_data(save_rows):
@@ -903,4 +942,5 @@ else:
             sub_t1, sub_t2 = st.tabs(["✍️ 내 계획 입력", "✅ 조원 계획 승인"])
             with sub_t1: render_my_plan_input(my_role, my_name)
             with sub_t2: render_team_approval()
+
 
