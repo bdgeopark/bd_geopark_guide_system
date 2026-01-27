@@ -84,6 +84,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
 
 def save_data(sheet_name, new_rows, header_list):
     try:
+        # 시트 열기 또는 생성
         try: sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         except:
             doc = client.open(SPREADSHEET_NAME)
@@ -94,31 +95,48 @@ def save_data(sheet_name, new_rows, header_list):
         old_df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=header_list)
         new_df = pd.DataFrame(new_rows, columns=header_list)
         
+        # 컬럼 이름 공백 제거
         old_df.columns = [str(c).strip() for c in old_df.columns]
         if '일자' in old_df.columns: old_df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 키 생성 (날짜+이름+장소)
+        # 키 생성 (중복 방지용)
         def make_key(d):
             k = str(d['날짜']) + str(d['이름'])
             if '장소' in d: k += str(d['장소'])
             return k
 
-        old_df['key'] = old_df.apply(make_key, axis=1)
+        # 데이터가 비어있지 않을 때만 키 생성
+        if not old_df.empty:
+            old_df['key'] = old_df.apply(make_key, axis=1)
+        else:
+            old_df['key'] = []
+            
         new_df['key'] = new_df.apply(make_key, axis=1)
             
+        # 중복 제거 (기존 데이터에서 덮어쓸 행 삭제)
         keys_to_remove = new_df['key'].tolist()
-        final_df = old_df[~old_df['key'].isin(keys_to_remove)].copy()
+        if not old_df.empty:
+            final_df = old_df[~old_df['key'].isin(keys_to_remove)].copy()
+        else:
+            final_df = old_df
         
+        # 키 컬럼 삭제
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
+        # 합치기
         combined = pd.concat([final_df, new_df], ignore_index=True)
         
+        # [핵심 수정] NaN(빈 값)을 빈 문자열("")로 변환하여 에러 방지
+        combined = combined.fillna("")
+        
+        # 날짜순 정렬
         if '날짜' in combined.columns:
             combined['날짜'] = pd.to_datetime(combined['날짜'], errors='coerce')
             combined = combined.sort_values('날짜')
             combined['날짜'] = combined['날짜'].dt.strftime("%Y-%m-%d")
             
+        # 구글 시트에 업로드
         sh.clear()
         sh.update([combined.columns.values.tolist()] + combined.values.tolist())
         return True
@@ -730,4 +748,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
