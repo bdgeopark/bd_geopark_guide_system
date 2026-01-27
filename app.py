@@ -58,34 +58,45 @@ def get_client():
 client = get_client()
 
 def load_data(sheet_name, year=None, month=None, island=None):
-    """데이터 불러오기 (숫자/문자 형변환 오류 해결 버전)"""
+    """데이터 불러오기 (강력한 필터링 적용 버전)"""
     try:
         sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         data = sh.get_all_records()
+        
+        # 데이터가 없으면 빈 DF 반환
+        if not data: return pd.DataFrame()
+        
         df = pd.DataFrame(data)
-        if df.empty: return pd.DataFrame()
+        
+        # [중요] 컬럼 이름 공백 제거 (예: " 년 " -> "년")
+        df.columns = [c.strip() for c in df.columns]
         
         # 1. 날짜 컬럼 변환
         if '날짜' in df.columns:
             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
             
-        # 2. 년/월 컬럼을 강제로 숫자로 변환 (에러 발생 시 0으로 처리)
+        # 2. 년/월 컬럼 숫자 변환 (비어있거나 이상한 값은 0으로 처리)
         if '년' in df.columns:
             df['년'] = pd.to_numeric(df['년'], errors='coerce').fillna(0).astype(int)
         if '월' in df.columns:
             df['월'] = pd.to_numeric(df['월'], errors='coerce').fillna(0).astype(int)
 
-        # 3. 필터링 적용
-        if year and '년' in df.columns: 
+        # 3. 필터링 로직 (조건이 있을 때만 적용)
+        # 2025년 데이터가 섞여 나오는 것을 막기 위해 강제 필터링
+        if year is not None:
             df = df[df['년'] == int(year)]
-        if month and '월' in df.columns: 
+            
+        if month is not None:
             df = df[df['월'] == int(month)]
-        if island and '섬' in df.columns: 
+            
+        if island:
             df = df[df['섬'] == island]
         
         return df
+
     except Exception as e:
-        # 에러 발생 시 빈 데이터프레임 반환 (디버깅용 print 추가 가능)
+        # 에러 발생 시 스트림릿 화면에 경고 표시 (디버깅용)
+        st.error(f"데이터 로드 중 오류: {e}")
         return pd.DataFrame()
         
 def save_data_append(sheet_name, new_row_list, header_list):
@@ -714,4 +725,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
