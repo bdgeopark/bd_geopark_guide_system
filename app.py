@@ -710,30 +710,34 @@ else:
         # =================================================
         # 🔵 [기능 2] 조원 계획 승인 (에러 수정됨)
         # =================================================
-        def render_team_approval(arg_year, arg_month, arg_range): # 인자 추가
+        # =================================================
+        # 🔵 [기능 2] 조원 계획 승인 (정밀 서식 및 테두리 완벽 적용)
+        # =================================================
+        def render_team_approval(arg_year, arg_month, arg_range):
             day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
             
-            # 현황판
+            # 1. 현황판
             st.markdown("#### 📊 계획 제출 현황")
             users_in_island = get_users_by_island_cached(current_island)
-            
             submitted_users = set()
             if not plan_df.empty:
                 active_df = plan_df[plan_df['활동여부'] != ""]
                 submitted_users = set(active_df['이름'].unique())
-            
             not_submitted = [u for u in users_in_island if u not in submitted_users]
+            
             s1, s2 = st.columns(2)
             s1.success(f"제출: {', '.join(submitted_users) if submitted_users else '(없음)'}")
             s2.error(f"미제출: {', '.join(not_submitted) if not_submitted else '(완료)'}")
             st.divider()
 
+            # 2. 장소 및 특이사항 입력
             c1, c2 = st.columns([2, 1])
             with c1: target_place = st.selectbox("관리할 안내소 선택", place_options, key="lead_place_sel")
             with c2: special_note = st.text_input("특이사항 (출력용)", placeholder="예: 행사 지원 등")
 
             st.subheader(f"📋 {target_place} 근무 편성표")
 
+            # 3. 데이터 준비
             place_plan_df = pd.DataFrame()
             if not plan_df.empty:
                 if '장소' not in plan_df.columns: plan_df['장소'] = "미지정"
@@ -745,6 +749,7 @@ else:
             
             if not display_users: st.warning("신청 내역이 없습니다.")
 
+            # 4. 화면 표시용 데이터프레임 생성
             matrix_data = []
             for d in target_dates:
                 d_obj = datetime.strptime(d, "%Y-%m-%d")
@@ -760,11 +765,10 @@ else:
                 row["인원"] = cnt
                 matrix_data.append(row)
 
-            # 에디터
+            # 5. 데이터 에디터 출력
             col_config = { "날짜": st.column_config.TextColumn(disabled=True), "raw_date": None, "인원": st.column_config.NumberColumn(disabled=True) }
             for u in display_users: col_config[u] = st.column_config.SelectboxColumn(label=u, options=shift_options, width="small")
 
-            # [중요] PDF 생성 시 사용할 최신 데이터
             edited_matrix = st.data_editor(pd.DataFrame(matrix_data), column_config=col_config, hide_index=True, use_container_width=True)
 
             c_btn1, c_btn2 = st.columns(2)
@@ -790,99 +794,240 @@ else:
                         return df[(df['날짜'].dt.year==year) & (df['날짜'].dt.month==month) & (df['섬']==island) & (df['장소']==place)]
                     except: return pd.DataFrame()
 
-                # PDF 생성 함수 (2단 헤더 적용: 이름 위, 시간 아래)
+                # PDF 생성 함수 (정밀 서식 적용)
                 def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path): st.error("폰트 파일 없음"); return None
                     
                     journal_df = get_journal_records(p_year, p_month, current_island, target_place)
-                    current_users = display_users if display_users else ["(없음)"]
-                    user_count = len(current_users)
                     
-                    pdf = FPDF(); pdf.add_page()
+                    pdf = FPDF(orientation='P', unit='mm', format='A4')
+                    
+                    # [설정] 여백: 상15, 좌15, 우15 (하단 10은 오토페이지브레이크로 제어)
+                    pdf.set_margins(15, 15, 15)
+                    pdf.set_auto_page_break(True, margin=10)
+                    
+                    pdf.add_page()
                     try: pdf.add_font("Nanum", "", font_path)
                     except: return None
 
+                    # -----------------------------------------------------------------
+                    # 1. 제목 (굵은 테두리 0.4mm)
+                    # -----------------------------------------------------------------
                     pdf.set_font("Nanum", "", 22)
-                    pdf.cell(0, 15, "지질공원 안내소 운영계획서", border=1, align="C", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
+                    pdf.set_line_width(0.4) # 굵게
+                    # 전체 폭 180mm (210 - 15 - 15)
+                    pdf.cell(180, 15, "지질공원 안내소 운영계획서", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                    
+                    pdf.ln(3) # 약간의 간격
 
-                    pdf.set_font("Nanum", "", 10); lh=8; pdf.set_fill_color(240, 240, 240)
-                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True); pdf.cell(65, lh, str(target_place), border=1, align="L")
-                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True); pdf.cell(65, lh, str(special_note), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
-                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True); pdf.cell(65, lh, f"{p_year}년 {p_month}월", border=1, align="L")
-                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True); pdf.cell(65, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
+                    # -----------------------------------------------------------------
+                    # 2. 정보 테이블 (내부 0.12, 외곽 0.4)
+                    # -----------------------------------------------------------------
+                    start_y_info = pdf.get_y()
+                    start_x_info = pdf.get_x()
 
-                    # [헤더 작성]
-                    w_date=10; w_day=10; w_remains=190-(w_date+w_day); w_sec=w_remains/2; w_user=w_sec/user_count
-                    pdf.set_fill_color(230, 230, 230); pdf.set_font("Nanum", "", 10)
-                    
-                    x=pdf.get_x(); y=pdf.get_y(); h_top=7; h_bot=7; h_tot=14
-                    
-                    # 1행: 일, 요일, 활동계획, 활동결과
-                    pdf.cell(w_date, h_tot, "일", border=1, align="C", fill=True)
-                    pdf.set_xy(x+w_date, y); pdf.cell(w_day, h_tot, "요일", border=1, align="C", fill=True)
-                    pdf.set_xy(x+w_date+w_day, y); pdf.cell(w_sec, h_top, "활동 계획", border=1, align="C", fill=True)
-                    pdf.set_xy(x+w_date+w_day+w_sec, y); pdf.cell(w_sec, h_top, "활동 결과", border=1, align="C", fill=True)
-                    
-                    # 2행: 해설사 이름들
-                    y_u=y+h_top; base_p=x+w_date+w_day; base_r=base_p+w_sec; pdf.set_font("Nanum","",8)
-                    for i,u in enumerate(current_users):
-                        pdf.set_xy(base_p+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
-                        pdf.set_xy(base_r+(i*w_user), y_u); pdf.cell(w_user, h_bot, u, border=1, align="C", fill=True)
-                    
-                    # 커서 복귀
-                    pdf.set_xy(x, y+h_tot)
+                    pdf.set_line_width(0.12) # 내부 얇게
+                    pdf.set_font("Nanum", "", 10)
+                    lh = 7
+                    pdf.set_fill_color(245, 245, 245)
 
-                    # [본문 작성] 시간만 표시
-                    row_h=8
-                    for _, row in matrix_df.iterrows():
-                        if pdf.get_y()>270: pdf.add_page(); pdf.set_y(10)
-                        x_c=pdf.get_x(); y_c=pdf.get_y(); d_str=row['raw_date']; d_obj=datetime.strptime(d_str, "%Y-%m-%d")
+                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True)
+                    pdf.cell(60, lh, str(target_place), border=1, align="L")
+                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True)
+                    pdf.cell(60, lh, str(special_note), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    
+                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True)
+                    pdf.cell(60, lh, f"{p_year}년 {p_month}월", border=1, align="L")
+                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True)
+                    pdf.cell(60, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    
+                    # 정보 테이블 외곽 굵은 테두리 덧칠
+                    end_y_info = pdf.get_y()
+                    pdf.set_line_width(0.4)
+                    pdf.set_fill_color(0,0,0,0) # 투명
+                    pdf.rect(start_x_info, start_y_info, 180, end_y_info - start_y_info)
+
+                    # -----------------------------------------------------------------
+                    # [간격] 위 표와 아래 표 사이 5mm
+                    # -----------------------------------------------------------------
+                    pdf.set_y(pdf.get_y() + 5)
+
+                    # -----------------------------------------------------------------
+                    # 3. 레이아웃 치수 (4칸 고정)
+                    # -----------------------------------------------------------------
+                    w_date = 12   # 일
+                    w_day = 12    # 요일
+                    w_remains = 180 - (w_date + w_day) # 156mm
+                    w_half = w_remains / 2 # 78mm
+                    w_cell = w_half / 4    # 19.5mm (4칸 고정)
+
+                    # -----------------------------------------------------------------
+                    # 4. 헤더 그리기 함수 (내부 0.12, 외곽 0.4)
+                    # -----------------------------------------------------------------
+                    def draw_header():
+                        y_start = pdf.get_y()
+                        x_start = pdf.get_x() # 15mm
                         
-                        pdf.set_xy(x_c, y_c); pdf.cell(w_date, row_h, str(d_obj.day), border=1, align="C")
-                        pdf.set_xy(x_c+w_date, y_c); pdf.cell(w_day, row_h, day_map[d_obj.weekday()], border=1, align="C")
-
-                        # 데이터 준비
-                        plan_map={}; planners=[]
-                        for u in current_users:
-                            stt=row.get(u,""); t_str=""
-                            if stt: 
-                                t_str=stt.replace("오전(4시간)","오전").replace("오후(4시간)","오후").replace("4시간","4H").replace("8시간","8H")
-                                if "기타" in stt: t_str="기타"
-                                planners.append(u)
-                            plan_map[u]=t_str # 시간만 저장
+                        h_row1 = 7
+                        h_row2 = 7
+                        h_total = 14
                         
-                        j_entries=[]
-                        if not journal_df.empty:
-                            j_rows=journal_df[journal_df['날짜']==d_str]
-                            for _,jr in j_rows.iterrows(): j_entries.append({"n":jr['이름'], "t":str(jr['활동시간'])+"H"})
-                        
-                        res_map={}; matched=[]
-                        for k, ent in enumerate(j_entries):
-                            if ent["n"] in current_users: res_map[ent["n"]]=ent["t"]; matched.append(k)
-                        unmatched=[e for k,e in enumerate(j_entries) if k not in matched]
-                        empty=[u for u in planners if u not in res_map]
-                        for k in range(min(len(unmatched), len(empty))): res_map[empty[k]]=f"{unmatched[k]['n']}\n({unmatched[k]['t']})"
+                        # [내부 얇은 선]
+                        pdf.set_line_width(0.12)
+                        pdf.set_font("Nanum", "", 10)
+                        pdf.set_fill_color(235, 235, 235)
 
-                        # 출력
-                        base_p=x_c+w_date+w_day; base_r=base_p+w_sec
-                        for i,u in enumerate(current_users):
-                            # 계획: 시간만
-                            pdf.set_xy(base_p+(i*w_user), y_c); pdf.cell(w_user, row_h, plan_map.get(u,""), border=1, align="C")
+                        # 1행
+                        pdf.cell(w_date, h_total, "일", border=1, align="C", fill=True)
+                        pdf.set_xy(x_start + w_date, y_start)
+                        pdf.cell(w_day, h_total, "요일", border=1, align="C", fill=True)
+                        
+                        pdf.set_xy(x_start + w_date + w_day, y_start)
+                        pdf.cell(w_half, h_row1, "활동 계획", border=1, align="C", fill=True)
+                        pdf.set_xy(x_start + w_date + w_day + w_half, y_start)
+                        pdf.cell(w_half, h_row1, "활동 결과", border=1, align="C", fill=True)
+                        
+                        # 2행: 해설사 이름 (4칸 고정)
+                        y_row2 = y_start + h_row1
+                        pdf.set_font("Nanum", "", 8)
+                        
+                        # 계획쪽 이름
+                        base_x = x_start + w_date + w_day
+                        for i in range(4):
+                            u_name = display_users[i] if i < len(display_users) else ""
+                            pdf.set_xy(base_x + (i * w_cell), y_row2)
+                            pdf.cell(w_cell, h_row2, u_name, border=1, align="C", fill=True)
                             
-                            # 결과: 시간 (대타면 이름+시간)
-                            c_x=base_r+(i*w_user); txt=res_map.get(u,"")
-                            pdf.set_xy(c_x, y_c)
-                            if "\n" in txt:
-                                pdf.set_font("Nanum","",7); pdf.set_xy(c_x, y_c+1); pdf.multi_cell(w_user, 3, txt, border=0, align="C")
-                                pdf.set_xy(c_x, y_c); pdf.rect(c_x, y_c, w_user, row_h); pdf.set_font("Nanum","",8)
-                            else: pdf.cell(w_user, row_h, txt, border=1, align="C")
+                        # 결과쪽 이름
+                        base_x = x_start + w_date + w_day + w_half
+                        for i in range(4):
+                            u_name = display_users[i] if i < len(display_users) else ""
+                            pdf.set_xy(base_x + (i * w_cell), y_row2)
+                            pdf.cell(w_cell, h_row2, u_name, border=1, align="C", fill=True)
                         
-                        pdf.set_xy(x_c, y_c+row_h)
+                        # [헤더 외곽 굵은 선]
+                        pdf.set_line_width(0.4)
+                        pdf.set_fill_color(0, 0, 0, 0)
+                        pdf.rect(x_start, y_start, 180, h_total)
+                        
+                        # 커서 복귀 및 선 굵기 초기화
+                        pdf.set_xy(x_start, y_start + h_total)
+                        pdf.set_line_width(0.12)
 
-                    pdf.ln(5); pdf.set_font("Nanum","",12)
-                    pdf.cell(95, 10, "조장 :                         (인/서명)", align="C")
-                    pdf.cell(95, 10, "면 담당 :                         (인/서명)", align="C", new_x="LMARGIN", new_y="NEXT")
+                    # 첫 페이지 헤더 그리기
+                    draw_header()
+                    
+                    # -----------------------------------------------------------------
+                    # 5. 본문 데이터 출력 (내부 0.12, 외곽 0.4)
+                    # -----------------------------------------------------------------
+                    row_h = 8
+                    
+                    # [본문 외곽선용 시작점 저장]
+                    body_start_y = pdf.get_y()
+                    
+                    for _, row in matrix_df.iterrows():
+                        # 페이지 넘김 체크 (하단 여백 10mm 고려)
+                        if pdf.get_y() > 275:
+                            # 1. 현재 페이지 본문 굵은 테두리 마감
+                            current_y = pdf.get_y()
+                            pdf.set_line_width(0.4)
+                            pdf.rect(15, body_start_y, 180, current_y - body_start_y)
+                            pdf.set_line_width(0.12) # 복구
+                            
+                            # 2. 페이지 추가
+                            pdf.add_page()
+                            draw_header()
+                            body_start_y = pdf.get_y() # 새 페이지 본문 시작점
+
+                        y_curr = pdf.get_y()
+                        x_curr = pdf.get_x() # 15
+                        d_str = row['raw_date']
+                        d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+
+                        # 날짜 & 요일
+                        pdf.set_font("Nanum", "", 9)
+                        pdf.set_xy(x_curr, y_curr)
+                        pdf.cell(w_date, row_h, str(d_obj.day), border=1, align="C")
+                        pdf.set_xy(x_curr + w_date, y_curr)
+                        pdf.cell(w_day, row_h, day_map[d_obj.weekday()], border=1, align="C")
+
+                        # 데이터 매핑 (4칸 고정)
+                        plan_list = [""] * 4
+                        res_list = [""] * 4
+                        
+                        # 계획 데이터
+                        for i in range(4):
+                            if i < len(display_users):
+                                u = display_users[i]
+                                s_t = row.get(u, "")
+                                if s_t:
+                                    t_str = s_t.replace("오전(4시간)","오전").replace("오후(4시간)","오후").replace("4시간","4H").replace("8시간","8H")
+                                    if "기타" in s_t: t_str="기타"
+                                    plan_list[i] = t_str
+
+                        # 결과 데이터
+                        j_entries = []
+                        if not journal_df.empty:
+                            j_rows = journal_df[journal_df['날짜'] == d_str]
+                            for _, jr in j_rows.iterrows():
+                                j_entries.append({"n": jr['이름'], "t": str(jr['활동시간'])+"H"})
+                        
+                        matched_indices = []
+                        # 1차: 본인
+                        for i in range(4):
+                            if i < len(display_users):
+                                owner = display_users[i]
+                                for k, ent in enumerate(j_entries):
+                                    if ent["n"] == owner:
+                                        res_list[i] = ent["t"]
+                                        matched_indices.append(k)
+                                        break
+                        
+                        # 2차: 대타
+                        unmatched = [e for k, e in enumerate(j_entries) if k not in matched_indices]
+                        empty_slots = [i for i in range(4) if res_list[i] == ""]
+                        for k in range(min(len(unmatched), len(empty_slots))):
+                            slot = empty_slots[k]
+                            res_list[slot] = f"{unmatched[k]['n']}\n({unmatched[k]['t']})"
+
+                        # [출력 - 계획]
+                        base_x = x_curr + w_date + w_day
+                        pdf.set_font("Nanum", "", 8)
+                        for i in range(4):
+                            pdf.set_xy(base_x + (i * w_cell), y_curr)
+                            pdf.cell(w_cell, row_h, plan_list[i], border=1, align="C")
+
+                        # [출력 - 결과]
+                        base_x = x_curr + w_date + w_day + w_half
+                        for i in range(4):
+                            c_x = base_x + (i * w_cell)
+                            txt = res_list[i]
+                            pdf.set_xy(c_x, y_curr)
+                            if "\n" in txt:
+                                pdf.set_font("Nanum", "", 7)
+                                pdf.set_xy(c_x, y_curr + 1)
+                                pdf.multi_cell(w_cell, 3, txt, border=0, align="C")
+                                pdf.set_xy(c_x, y_curr)
+                                pdf.rect(c_x, y_curr, w_cell, row_h)
+                                pdf.set_font("Nanum", "", 8)
+                            else:
+                                pdf.cell(w_cell, row_h, txt, border=1, align="C")
+                        
+                        pdf.set_xy(x_curr, y_curr + row_h)
+
+                    # [마지막 페이지 본문 굵은 테두리 마감]
+                    final_y = pdf.get_y()
+                    pdf.set_line_width(0.4)
+                    pdf.rect(15, body_start_y, 180, final_y - body_start_y)
+                    pdf.set_line_width(0.12)
+
+                    # 서명
+                    pdf.ln(5)
+                    pdf.set_font("Nanum", "", 12)
+                    pdf.cell(90, 10, "조장 :                         (인/서명)", align="C")
+                    pdf.cell(90, 10, "면 담당 :                         (인/서명)", align="C", new_x="LMARGIN", new_y="NEXT")
+                    
                     return bytes(pdf.output())
 
                 def approve_callback():
@@ -894,9 +1039,7 @@ else:
                     save_plan_data(rows)
                     st.toast("승인 완료!")
 
-                # PDF 생성 시 edited_matrix 사용 (편집된 내용 반영)
                 pdf_data = create_pdf(target_place, special_note, arg_year, arg_month, arg_range, edited_matrix, display_users)
-                
                 if pdf_data:
                     st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{arg_month}월.pdf", "application/pdf", on_click=approve_callback)
 
@@ -912,3 +1055,4 @@ else:
         else:
             # 관리자
             render_team_approval(p_year, p_month, p_range) # 인자 전달
+
