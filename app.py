@@ -58,26 +58,36 @@ def get_client():
 client = get_client()
 
 def load_data(sheet_name, year=None, month=None, island=None):
-    """데이터 불러오기 (필터링 옵션 포함)"""
+    """데이터 불러오기 (숫자/문자 형변환 오류 해결 버전)"""
     try:
         sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         data = sh.get_all_records()
         df = pd.DataFrame(data)
         if df.empty: return pd.DataFrame()
         
-        # 날짜 타입 변환 시도
+        # 1. 날짜 컬럼 변환
         if '날짜' in df.columns:
             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
             
-        # 필터링
-        if year and '년' in df.columns: df = df[df['년'] == year]
-        if month and '월' in df.columns: df = df[df['월'] == month]
-        if island and '섬' in df.columns: df = df[df['섬'] == island]
+        # 2. 년/월 컬럼을 강제로 숫자로 변환 (에러 발생 시 0으로 처리)
+        if '년' in df.columns:
+            df['년'] = pd.to_numeric(df['년'], errors='coerce').fillna(0).astype(int)
+        if '월' in df.columns:
+            df['월'] = pd.to_numeric(df['월'], errors='coerce').fillna(0).astype(int)
+
+        # 3. 필터링 적용
+        if year and '년' in df.columns: 
+            df = df[df['년'] == int(year)]
+        if month and '월' in df.columns: 
+            df = df[df['월'] == int(month)]
+        if island and '섬' in df.columns: 
+            df = df[df['섬'] == island]
         
         return df
-    except:
+    except Exception as e:
+        # 에러 발생 시 빈 데이터프레임 반환 (디버깅용 print 추가 가능)
         return pd.DataFrame()
-
+        
 def save_data_append(sheet_name, new_row_list, header_list):
     """데이터 저장 (기존 데이터 유지, 키 기반 중복 제거 후 저장)"""
     try:
@@ -416,31 +426,44 @@ def ui_write_journal(user_name, user_island):
                     time.sleep(1); st.rerun()
 
 def ui_view_activity(scope, user_name, user_island):
-    """활동 조회 탭"""
+    """활동 조회 탭 (타임스탬프 숨김 + 최신순 정렬)"""
     st.header("🔍 활동 내역 조회")
     
     # 필터
     c1, c2 = st.columns(2)
-    with c1: vy = st.number_input("조회 연도", value=datetime.now().year)
-    with c2: vm = st.number_input("조회 월", value=datetime.now().month)
+    with c1: vy = st.number_input("조회 연도", value=datetime.now().year, step=1)
+    with c2: vm = st.number_input("조회 월", value=datetime.now().month, step=1)
     
-    df = load_data("운영일지", vy, vm, user_island if scope != "all" else None)
+    # 관리자는 전체 조회, 그 외는 자기 섬만
+    search_island = user_island if scope != "all" else None
+    
+    df = load_data("운영일지", vy, vm, search_island)
     
     if df.empty:
-        st.info("데이터가 없습니다.")
+        st.info(f"{vy}년 {vm}월 데이터가 없습니다.")
         return
 
-    # 권한별 필터링
+    # 권한별 필터링 (내 활동 / 팀 활동)
     if scope == "me":
         df = df[df['이름'] == user_name]
-    elif scope == "team":
-        # 이미 user_island로 로드됨
-        pass
-    elif scope == "all":
-        # 관리자는 전체 보기 (섬 선택 옵션 추가 가능)
-        pass
+    
+    # 보기 좋게 정렬 (날짜 내림차순: 최신 날짜가 위로)
+    if '날짜' in df.columns:
+        df = df.sort_values(by='날짜', ascending=False)
 
-    st.dataframe(df, use_container_width=True)
+    # 화면에 표시 (타임스탬프 숨김 처리)
+    st.dataframe(
+        df, 
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "타임스탬프": None,  # None으로 설정하면 화면에서 숨겨집니다.
+            "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD"),
+            "활동시간": st.column_config.NumberColumn("시간", format="%d시간"),
+            "년": None, # 이미 위에서 선택했으므로 표에서는 숨김
+            "월": None
+        }
+    )
 
 def ui_input_plan(user_name, user_island):
     """활동 계획 입력 탭"""
@@ -691,3 +714,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
