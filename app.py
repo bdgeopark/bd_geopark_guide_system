@@ -1017,6 +1017,235 @@ else:
                 if pdf_data:
                     st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{arg_month}월.pdf", "application/pdf", on_click=approve_callback)
                     
+# -----------------------------------------------------
+    # 탭 4: 운영일지 (모바일/PC 모드 분리 적용)
+    # -----------------------------------------------------
+    with tabs[3]:
+        st.header("📝 운영일지 작성 (활동 결과)")
+        
+        # 0. 요일 맵핑
+        day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
+
+        # 1. 공통 설정
+        today = datetime.now()
+        next_month_date = today.replace(day=28) + pd.Timedelta(days=4)
+        j_year = st.number_input("연도", value=today.year, key="j_year")
+        j_month = st.number_input("월", value=today.month, key="j_month")
+        
+        # 날짜 리스트 생성
+        _, last_day = calendar.monthrange(j_year, j_month)
+        target_dates = [datetime(j_year, j_month, d).strftime("%Y-%m-%d") for d in range(1, last_day + 1)]
+
+        # DB 로드 (운영일지 시트)
+        # 함수가 없다면 기존에 쓰시던 로직을 그대로 사용하거나 아래와 같이 간단히 구현
+        def load_journal_data(year, month, island):
+            try:
+                sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                df = pd.DataFrame(sheet.get_all_records())
+                if df.empty: return pd.DataFrame()
+                # 필터링
+                df = df[(df['년'] == year) & (df['월'] == month) & (df['섬'] == island)]
+                return df
+            except:
+                return pd.DataFrame()
+
+        def save_journal_data(new_rows):
+            try:
+                # 시트 열기/생성
+                try: sheet = client.open(SPREADSHEET_NAME).worksheet("운영일지")
+                except: 
+                    doc = client.open(SPREADSHEET_NAME)
+                    sheet = doc.add_worksheet("운영일지", 1000, 15)
+                    sheet.append_row(["년","월","날짜","섬","장소","이름","활동시간","활동내용","탐방객수","비고","타임스탬프"])
+                    return True
+                
+                existing = sheet.get_all_records()
+                old_df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=["년","월","날짜","섬","장소","이름","활동시간","활동내용","탐방객수","비고","타임스탬프"])
+                new_df = pd.DataFrame(new_rows, columns=old_df.columns)
+                
+                # 키 생성 (날짜_이름_장소)로 중복 제거
+                old_df['key'] = old_df['날짜'].astype(str) + "_" + old_df['이름'] + "_" + old_df['장소']
+                new_df['key'] = new_df['날짜'].astype(str) + "_" + new_df['이름'] + "_" + new_df['장소']
+                
+                keys_to_remove = new_df['key'].tolist()
+                final_df = old_df[~old_df['key'].isin(keys_to_remove)].copy()
+                
+                final_df = final_df.drop(columns=['key'])
+                new_df = new_df.drop(columns=['key'])
+                
+                combined = pd.concat([final_df, new_df], ignore_index=True)
+                sheet.clear()
+                sheet.update([combined.columns.values.tolist()] + combined.values.tolist())
+                return True
+            except Exception as e:
+                st.error(f"저장 오류: {e}")
+                return False
+
+        # 데이터 불러오기
+        current_island = user['섬'] if my_role != "관리자" else st.selectbox("섬(관리자)", ["백령도", "대청도", "소청도"], key="j_island")
+        journal_df = load_journal_data(j_year, j_month, current_island)
+        place_options = locations.get(current_island, [])
+
+        st.divider()
+
+        # -------------------------------------------------------------
+        # 입력 방식 선택 (핵심 기능)
+        # -------------------------------------------------------------
+        input_mode = st.radio("입력 방식", ["📅 하루씩 입력 (모바일용)", "🗓️ 월간 전체 입력 (PC용)"], horizontal=True, key="j_mode")
+
+        # 공통: 장소 선택
+        selected_place = st.selectbox("안내소 선택", place_options, key="j_place_sel")
+
+        # -------------------------------------------------------------
+        # [MODE A] 하루씩 입력 (모바일 최적화)
+        # -------------------------------------------------------------
+        if "하루씩" in input_mode:
+            st.info(f"👉 **{selected_place}**의 활동 내역을 입력하세요.")
+            
+            c_date1, c_date2 = st.columns([1, 1.5])
+            with c_date1:
+                # 날짜 선택
+                today_val = datetime.now().date()
+                # 범위 내에 오늘이 없으면 시작일로
+                min_d = datetime.strptime(target_dates[0], "%Y-%m-%d").date()
+                max_d = datetime.strptime(target_dates[-1], "%Y-%m-%d").date()
+                if not (min_d <= today_val <= max_d): today_val = min_d
+                
+                pick_date = st.date_input("날짜", value=today_val, min_value=min_d, max_value=max_d, key="j_pick_date")
+                pick_date_str = pick_date.strftime("%Y-%m-%d")
+                w_day = day_map[pick_date.weekday()]
+            
+            # 기존 데이터 찾기 (Pre-fill)
+            prev_time = "활동 없음"
+            prev_content = ""
+            prev_visitor = 0
+            prev_note = ""
+            
+            if not journal_df.empty:
+                cond = (journal_df['날짜'] == pick_date_str) & (journal_df['이름'] == my_name) & (journal_df['장소'] == selected_place)
+                found = journal_df[cond]
+                if not found.empty:
+                    # 기존 값이 있으면 가져옴
+                    r = found.iloc[0]
+                    t_val = str(r['활동시간'])
+                    if t_val == "8": prev_time = "종일 (8시간)"
+                    elif t_val == "4": prev_time = "반일 (4시간)"
+                    else: prev_time = "활동 없음" # 혹은 기타 처리
+                    
+                    prev_content = str(r['활동내용'])
+                    prev_visitor = int(r['탐방객수']) if r['탐방객수'] else 0
+                    prev_note = str(r['비고'])
+
+            with c_date2:
+                st.markdown(f"**{pick_date.month}월 {pick_date.day}일 ({w_day})**")
+                
+            # 입력 폼
+            with st.form("journal_daily_form"):
+                # 1. 활동 시간 (라디오버튼으로 크게)
+                st.markdown("**1. 활동 시간**")
+                sel_time = st.radio("시간 선택", ["활동 없음", "종일 (8시간)", "반일 (4시간)"], 
+                                    index=["활동 없음", "종일 (8시간)", "반일 (4시간)"].index(prev_time) if prev_time in ["활동 없음", "종일 (8시간)", "반일 (4시간)"] else 0,
+                                    horizontal=True)
+                
+                # 2. 활동 내용 (텍스트 영역)
+                st.markdown("**2. 활동 내용**")
+                in_content = st.text_area("주요 활동 내용을 적어주세요.", value=prev_content, height=100)
+                
+                # 3. 탐방객 수 & 비고
+                c_f1, c_f2 = st.columns(2)
+                with c_f1:
+                    in_visitor = st.number_input("탐방객 수 (명)", min_value=0, value=prev_visitor, step=1)
+                with c_f2:
+                    in_note = st.text_input("비고", value=prev_note)
+                
+                submit = st.form_submit_button("💾 저장하기", use_container_width=True)
+                
+                if submit:
+                    # 저장 로직
+                    save_t = ""
+                    if "8시간" in sel_time: save_t = 8
+                    elif "4시간" in sel_time: save_t = 4
+                    else: save_t = "" # 활동 없음
+                    
+                    # 활동 없음이면 저장 안하거나 빈값 저장? -> 여기선 빈값으로 덮어써서 삭제 효과
+                    save_rows = [[j_year, j_month, pick_date_str, current_island, selected_place, my_name, save_t, in_content, in_visitor, in_note, str(datetime.now())]]
+                    
+                    if save_journal_data(save_rows):
+                        st.success(f"✅ {pick_date.month}/{pick_date.day} 일지가 저장되었습니다.")
+                        time.sleep(0.5)
+                        st.rerun()
+
+        # -------------------------------------------------------------
+        # [MODE B] 월간 전체 입력 (PC용 - 기존 표 방식)
+        # -------------------------------------------------------------
+        else:
+            st.info(f"👉 **{selected_place}**의 월간 활동 내역을 관리합니다.")
+            
+            # 데이터 매핑
+            grid_data = []
+            prev_map = {}
+            if not journal_df.empty:
+                cond = (journal_df['이름'] == my_name) & (journal_df['장소'] == selected_place)
+                filtered = journal_df[cond]
+                for _, r in filtered.iterrows():
+                    prev_map[r['날짜']] = r
+
+            for d_str in target_dates:
+                d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                w_day = day_map[d_obj.weekday()]
+                
+                # 기존값
+                p_data = prev_map.get(d_str, {})
+                
+                t_val = p_data.get('활동시간', "")
+                # 체크박스 로직으로 변환
+                is_8 = (str(t_val) == "8")
+                is_4 = (str(t_val) == "4")
+                
+                grid_data.append({
+                    "날짜": d_str,
+                    "요일": w_day,
+                    "종일(8H)": is_8,
+                    "반일(4H)": is_4,
+                    "활동내용": p_data.get('활동내용', ""),
+                    "탐방객수": p_data.get('탐방객수', 0),
+                    "비고": p_data.get('비고', "")
+                })
+            
+            with st.form("journal_period_form"):
+                edited_df = st.data_editor(
+                    pd.DataFrame(grid_data),
+                    column_config={
+                        "날짜": st.column_config.TextColumn(disabled=True),
+                        "요일": st.column_config.TextColumn(disabled=True),
+                        "종일(8H)": st.column_config.CheckboxColumn("종일(8H)", default=False),
+                        "반일(4H)": st.column_config.CheckboxColumn("반일(4H)", default=False),
+                        "활동내용": st.column_config.TextColumn("활동내용", width="large"),
+                        "탐방객수": st.column_config.NumberColumn("탐방객수", min_value=0, step=1),
+                        "비고": st.column_config.TextColumn("비고")
+                    },
+                    hide_index=True, use_container_width=True, height=600
+                )
+                
+                if st.form_submit_button("💾 전체 일괄 저장"):
+                    save_rows = []
+                    for _, row in edited_df.iterrows():
+                        # 시간 계산
+                        final_t = ""
+                        if row['종일(8H)']: final_t = 8
+                        elif row['반일(4H)']: final_t = 4
+                        
+                        # 내용이 있거나 시간이 있을 때만 저장 (또는 덮어쓰기 위해 다 저장)
+                        save_rows.append([
+                            j_year, j_month, row['날짜'], current_island, selected_place, my_name,
+                            final_t, row['활동내용'], row['탐방객수'], row['비고'], str(datetime.now())
+                        ])
+                    
+                    if save_journal_data(save_rows):
+                        st.success("✅ 월간 일지가 저장되었습니다.")
+                        time.sleep(1)
+                        st.rerun()
+        
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
         # =================================================
@@ -1029,5 +1258,6 @@ else:
         else:
             # 관리자
             render_team_approval(p_year, p_month, p_range) # 인자 전달
+
 
 
