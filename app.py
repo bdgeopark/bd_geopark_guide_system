@@ -642,16 +642,20 @@ else:
         st.divider()
 
         # =================================================
-        # 🟢 [기능 1] 내 계획 입력 함수
+        # 🟢 [기능 1] 내 계획 입력 함수 (모바일/PC 모드 분리)
         # =================================================
         def render_my_plan_input(role_name, user_name):
-            day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
             st.subheader(f"🙋‍♂️ {user_name}님의 근무 신청")
             
+            # 1. 안내소 선택 (공통)
             selected_place = st.selectbox("근무할 안내소를 선택하세요", place_options, key="my_place_sel")
-            st.info(f"👉 **{selected_place}** 근무 시간을 선택하세요. (기타 선택 시 시간 필수 입력)")
+            
+            st.divider()
 
-            input_data = []
+            # 2. 입력 방식 선택 (탭으로 구분)
+            input_mode = st.radio("입력 방식 선택", ["📅 하루씩 입력 (모바일 추천)", "🗓️ 기간 전체 입력 (PC 추천)"], horizontal=True)
+            
+            # DB 데이터 미리 가져오기 (공통)
             my_prev_data = {}
             if not plan_df.empty:
                 cond = (plan_df['이름'] == user_name) & (plan_df['장소'] == selected_place)
@@ -659,53 +663,125 @@ else:
                 for _, r in filtered.iterrows():
                     my_prev_data[r['일자']] = r['활동여부']
 
-            for d_str in target_dates:
-                d_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                w_day = day_map[d_obj.weekday()]
+            # ---------------------------------------------------------
+            # [MODE A] 하루씩 입력 (모바일 최적화)
+            # ---------------------------------------------------------
+            if "하루씩" in input_mode:
+                st.info("💡 날짜를 선택하고 근무 시간을 체크하세요.")
                 
-                db_val = my_prev_data.get(d_str, "")
-                is_all=False; is_am=False; is_pm=False; is_etc=False; etc_text=""
-                
-                if db_val == "종일": is_all = True
-                elif "오전" in db_val: is_am = True
-                elif "오후" in db_val: is_pm = True
-                elif db_val != "": is_etc = True; etc_text = db_val
-
-                input_data.append({
-                    "날짜": d_str, "요일": w_day,
-                    "종일": is_all, "오전": is_am, "오후": is_pm, "기타": is_etc, "⏰ 시간입력": etc_text
-                })
-            
-            with st.form("my_plan_form"):
-                edited_df = st.data_editor(
-                    pd.DataFrame(input_data),
-                    column_config={
-                        "날짜": st.column_config.TextColumn(disabled=True),
-                        "요일": st.column_config.TextColumn(disabled=True),
-                        "종일": st.column_config.CheckboxColumn("종일", default=False),
-                        "오전": st.column_config.CheckboxColumn("오전", default=False),
-                        "오후": st.column_config.CheckboxColumn("오후", default=False),
-                        "기타": st.column_config.CheckboxColumn("기타", default=False),
-                        "⏰ 시간입력": st.column_config.TextColumn("⏰ 시간(기타)", default="")
-                    },
-                    hide_index=True, use_container_width=True, height=600
-                )
-
-                if st.form_submit_button("💾 내 계획 저장하기"):
-                    save_rows = []
-                    for _, row in edited_df.iterrows():
-                        status = ""
-                        if row['종일']: status = "종일"
-                        elif row['오전']: status = "오전(4시간)"
-                        elif row['오후']: status = "오후(4시간)"
-                        elif row['기타']:
-                            input_time = str(row['⏰ 시간입력']).strip()
-                            status = input_time if input_time else "시간미정"
-                        
-                        save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", "", str(datetime.now())])
+                col_d1, col_d2 = st.columns([1, 1.5])
+                with col_d1:
+                    # 날짜 선택기 (기본값: 오늘이 기간 내에 있으면 오늘, 아니면 시작일)
+                    default_date = datetime.now().date()
+                    try:
+                        start_d = datetime.strptime(target_dates[0], "%Y-%m-%d").date()
+                        end_d = datetime.strptime(target_dates[-1], "%Y-%m-%d").date()
+                        if not (start_d <= default_date <= end_d):
+                            default_date = start_d
+                    except: pass
                     
+                    pick_date = st.date_input("날짜 선택", value=default_date, min_value=datetime.strptime(target_dates[0], "%Y-%m-%d"), max_value=datetime.strptime(target_dates[-1], "%Y-%m-%d"))
+                    pick_date_str = pick_date.strftime("%Y-%m-%d")
+                    w_day = day_map[pick_date.weekday()]
+
+                # 해당 날짜의 기존 값 확인
+                prev_val = my_prev_data.get(pick_date_str, "")
+                
+                # 라디오 버튼 초기값 설정
+                radio_idx = 0 # 기본: 활동 없음
+                etc_val = ""
+                
+                if prev_val == "종일": radio_idx = 1
+                elif "오전" in prev_val: radio_idx = 2
+                elif "오후" in prev_val: radio_idx = 3
+                elif prev_val != "": radio_idx = 4; etc_val = prev_val # 기타
+
+                with col_d2:
+                    st.markdown(f"**{pick_date.month}월 {pick_date.day}일 ({w_day})**")
+                    # 모바일에서 터치하기 쉽게 라디오 버튼 사용
+                    selection = st.radio(
+                        "활동 시간 선택",
+                        ["❌ 활동 없음", "🌕 종일 (8시간)", "☀️ 오전 (4시간)", "🌙 오후 (4시간)", "✏️ 기타 (직접입력)"],
+                        index=radio_idx
+                    )
+
+                # 기타 입력창
+                final_status = ""
+                if "종일" in selection: final_status = "종일"
+                elif "오전" in selection: final_status = "오전(4시간)"
+                elif "오후" in selection: final_status = "오후(4시간)"
+                elif "기타" in selection:
+                    final_status = st.text_input("⏰ 시간 입력 (예: 13:00~15:00)", value=etc_val)
+                else:
+                    final_status = ""
+
+                # 저장 버튼
+                if st.button("💾 이 날짜 저장하기", use_container_width=True):
+                    # 기타인데 시간 안 쓴 경우 처리
+                    if "기타" in selection and not final_status:
+                        final_status = "시간미정"
+                        
+                    save_rows = [[p_year, p_month, pick_date_str, current_island, selected_place, user_name, final_status, "", "", str(datetime.now())]]
                     if save_plan_data(save_rows):
-                        st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
+                        st.success(f"✅ {pick_date.month}/{pick_date.day} ({w_day}) 저장 완료!")
+                        time.sleep(0.5)
+                        st.rerun()
+
+            # ---------------------------------------------------------
+            # [MODE B] 기간 전체 입력 (기존 표 방식)
+            # ---------------------------------------------------------
+            else:
+                st.info(f"👉 **{selected_place}**의 {p_range} 전체 계획을 입력합니다.")
+                
+                input_data = []
+                for d_str in target_dates:
+                    d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                    w_day = day_map[d_obj.weekday()]
+                    db_val = my_prev_data.get(d_str, "")
+                    
+                    is_all=False; is_am=False; is_pm=False; is_etc=False; etc_text=""
+                    if db_val == "종일": is_all = True
+                    elif "오전" in db_val: is_am = True
+                    elif "오후" in db_val: is_pm = True
+                    elif db_val != "": is_etc = True; etc_text = db_val
+
+                    input_data.append({
+                        "날짜": d_str, "요일": w_day,
+                        "종일": is_all, "오전": is_am, "오후": is_pm, "기타": is_etc, "⏰ 시간입력": etc_text
+                    })
+                
+                with st.form("my_plan_form_period"):
+                    # 범례(헤더) 문제를 해결하기 위해 column_config에 help 툴팁 추가했지만, 
+                    # 모바일에서는 '하루씩 입력' 모드가 훨씬 편할 것입니다.
+                    edited_df = st.data_editor(
+                        pd.DataFrame(input_data),
+                        column_config={
+                            "날짜": st.column_config.TextColumn(disabled=True),
+                            "요일": st.column_config.TextColumn(disabled=True),
+                            "종일": st.column_config.CheckboxColumn("종일", default=False),
+                            "오전": st.column_config.CheckboxColumn("오전", default=False),
+                            "오후": st.column_config.CheckboxColumn("오후", default=False),
+                            "기타": st.column_config.CheckboxColumn("기타", default=False),
+                            "⏰ 시간입력": st.column_config.TextColumn("⏰ 시간(기타)", default="")
+                        },
+                        hide_index=True, use_container_width=True, height=600
+                    )
+
+                    if st.form_submit_button("💾 전체 계획 일괄 저장"):
+                        save_rows = []
+                        for _, row in edited_df.iterrows():
+                            status = ""
+                            if row['종일']: status = "종일"
+                            elif row['오전']: status = "오전(4시간)"
+                            elif row['오후']: status = "오후(4시간)"
+                            elif row['기타']:
+                                input_time = str(row['⏰ 시간입력']).strip()
+                                status = input_time if input_time else "시간미정"
+                            
+                            save_rows.append([p_year, p_month, row['날짜'], current_island, selected_place, user_name, status, "", "", str(datetime.now())])
+                        
+                        if save_plan_data(save_rows):
+                            st.success("✅ 전체 기간이 저장되었습니다!"); time.sleep(1); st.rerun()
 
         # =================================================
         # 🔵 [기능 2] 조원 계획 승인 (최종: 주요 텍스트 볼드 처리)
@@ -1029,6 +1105,7 @@ else:
         else:
             # 관리자
             render_team_approval(p_year, p_month, p_range) # 인자 전달
+
 
 
 
