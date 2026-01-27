@@ -708,10 +708,7 @@ else:
                         st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
 
         # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (에러 수정됨)
-        # =================================================
-        # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (정밀 서식 및 테두리 완벽 적용)
+        # 🔵 [기능 2] 조원 계획 승인 (에러 수정: 투명 배경 로직 개선)
         # =================================================
         def render_team_approval(arg_year, arg_month, arg_range):
             day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
@@ -794,7 +791,7 @@ else:
                         return df[(df['날짜'].dt.year==year) & (df['날짜'].dt.month==month) & (df['섬']==island) & (df['장소']==place)]
                     except: return pd.DataFrame()
 
-                # PDF 생성 함수 (정밀 서식 적용)
+                # PDF 생성 함수 (수정됨)
                 def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path): st.error("폰트 파일 없음"); return None
@@ -842,11 +839,11 @@ else:
                     pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True)
                     pdf.cell(60, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
                     
-                    # 정보 테이블 외곽 굵은 테두리 덧칠
+                    # 정보 테이블 외곽 굵은 테두리 덧칠 (투명 대신 style="D" 사용)
                     end_y_info = pdf.get_y()
                     pdf.set_line_width(0.4)
-                    pdf.set_fill_color(0,0,0,0) # 투명
-                    pdf.rect(start_x_info, start_y_info, 180, end_y_info - start_y_info)
+                    # [수정됨] style="D"는 Draw border only (No fill)을 의미함
+                    pdf.rect(start_x_info, start_y_info, 180, end_y_info - start_y_info, style="D")
 
                     # -----------------------------------------------------------------
                     # [간격] 위 표와 아래 표 사이 5mm
@@ -906,10 +903,9 @@ else:
                             pdf.set_xy(base_x + (i * w_cell), y_row2)
                             pdf.cell(w_cell, h_row2, u_name, border=1, align="C", fill=True)
                         
-                        # [헤더 외곽 굵은 선]
+                        # [헤더 외곽 굵은 선] - 수정됨: style="D" 사용
                         pdf.set_line_width(0.4)
-                        pdf.set_fill_color(0, 0, 0, 0)
-                        pdf.rect(x_start, y_start, 180, h_total)
+                        pdf.rect(x_start, y_start, 180, h_total, style="D")
                         
                         # 커서 복귀 및 선 굵기 초기화
                         pdf.set_xy(x_start, y_start + h_total)
@@ -929,10 +925,10 @@ else:
                     for _, row in matrix_df.iterrows():
                         # 페이지 넘김 체크 (하단 여백 10mm 고려)
                         if pdf.get_y() > 275:
-                            # 1. 현재 페이지 본문 굵은 테두리 마감
+                            # 1. 현재 페이지 본문 굵은 테두리 마감 (수정됨: style="D")
                             current_y = pdf.get_y()
                             pdf.set_line_width(0.4)
-                            pdf.rect(15, body_start_y, 180, current_y - body_start_y)
+                            pdf.rect(15, body_start_y, 180, current_y - body_start_y, style="D")
                             pdf.set_line_width(0.12) # 복구
                             
                             # 2. 페이지 추가
@@ -1016,10 +1012,10 @@ else:
                         
                         pdf.set_xy(x_curr, y_curr + row_h)
 
-                    # [마지막 페이지 본문 굵은 테두리 마감]
+                    # [마지막 페이지 본문 굵은 테두리 마감] - 수정됨: style="D"
                     final_y = pdf.get_y()
                     pdf.set_line_width(0.4)
-                    pdf.rect(15, body_start_y, 180, final_y - body_start_y)
+                    pdf.rect(15, body_start_y, 180, final_y - body_start_y, style="D")
                     pdf.set_line_width(0.12)
 
                     # 서명
@@ -1055,4 +1051,5 @@ else:
         else:
             # 관리자
             render_team_approval(p_year, p_month, p_range) # 인자 전달
+
 
