@@ -708,7 +708,7 @@ else:
                         st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
 
         # =================================================
-        # 🔵 [기능 2] 조원 계획 승인 (에러 수정: 투명 배경 로직 개선)
+        # 🔵 [기능 2] 조원 계획 승인 (최종: 주요 텍스트 볼드 처리)
         # =================================================
         def render_team_approval(arg_year, arg_month, arg_range):
             day_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
@@ -791,7 +791,7 @@ else:
                         return df[(df['날짜'].dt.year==year) & (df['날짜'].dt.month==month) & (df['섬']==island) & (df['장소']==place)]
                     except: return pd.DataFrame()
 
-                # PDF 생성 함수 (수정됨)
+                # PDF 생성 함수 (볼드 처리 적용)
                 def create_pdf(target_place, special_note, p_year, p_month, p_range, matrix_df, display_users):
                     font_path = "NanumGothic.ttf"
                     if not os.path.exists(font_path): st.error("폰트 파일 없음"); return None
@@ -799,80 +799,75 @@ else:
                     journal_df = get_journal_records(p_year, p_month, current_island, target_place)
                     
                     pdf = FPDF(orientation='P', unit='mm', format='A4')
-                    
-                    # [설정] 여백: 상15, 좌15, 우15 (하단 10은 오토페이지브레이크로 제어)
                     pdf.set_margins(15, 15, 15)
                     pdf.set_auto_page_break(True, margin=10)
                     
                     pdf.add_page()
-                    try: pdf.add_font("Nanum", "", font_path)
+                    try: 
+                        # 일반 폰트 등록
+                        pdf.add_font("Nanum", "", font_path)
+                        # [중요] 볼드 폰트 등록 (같은 파일이지만 스타일 B를 위해 등록)
+                        pdf.add_font("Nanum", "B", font_path)
                     except: return None
 
                     # -----------------------------------------------------------------
-                    # 1. 제목 (굵은 테두리 0.4mm)
+                    # 1. 제목 (진하게 0.4mm 테두리)
                     # -----------------------------------------------------------------
-                    pdf.set_font("Nanum", "", 22)
-                    pdf.set_line_width(0.4) # 굵게
-                    # 전체 폭 180mm (210 - 15 - 15)
+                    pdf.set_font("Nanum", "B", 22) # Bold
+                    pdf.set_line_width(0.4) 
                     pdf.cell(180, 15, "지질공원 안내소 운영계획서", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-                    
-                    pdf.ln(3) # 약간의 간격
+                    pdf.ln(3)
 
                     # -----------------------------------------------------------------
-                    # 2. 정보 테이블 (내부 0.12, 외곽 0.4)
+                    # 2. 정보 테이블 (항목명 진하게)
                     # -----------------------------------------------------------------
                     start_y_info = pdf.get_y()
                     start_x_info = pdf.get_x()
 
-                    pdf.set_line_width(0.12) # 내부 얇게
-                    pdf.set_font("Nanum", "", 10)
+                    pdf.set_line_width(0.12)
                     lh = 7
                     pdf.set_fill_color(245, 245, 245)
 
-                    pdf.cell(30, lh, "안내소", border=1, align="C", fill=True)
-                    pdf.cell(60, lh, str(target_place), border=1, align="L")
-                    pdf.cell(30, lh, "특이사항", border=1, align="C", fill=True)
-                    pdf.cell(60, lh, str(special_note), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    # 함수: 항목명(Bold) + 내용(Regular) 출력 헬퍼
+                    def print_info_row(label, value, is_new_line=False):
+                        pdf.set_font("Nanum", "B", 10) # 항목명 Bold
+                        pdf.cell(30, lh, label, border=1, align="C", fill=True)
+                        pdf.set_font("Nanum", "", 10)  # 내용 Regular
+                        next_pos = "LMARGIN" if is_new_line else "RIGHT"
+                        next_y_pos = "NEXT" if is_new_line else "TOP"
+                        pdf.cell(60, lh, str(value), border=1, align="L", new_x=next_pos, new_y=next_y_pos)
+
+                    print_info_row("안내소", target_place)
+                    print_info_row("특이사항", special_note, is_new_line=True)
                     
-                    pdf.cell(30, lh, "활동월", border=1, align="C", fill=True)
-                    pdf.cell(60, lh, f"{p_year}년 {p_month}월", border=1, align="L")
-                    pdf.cell(30, lh, "활동기간", border=1, align="C", fill=True)
-                    pdf.cell(60, lh, str(p_range), border=1, align="L", new_x="LMARGIN", new_y="NEXT")
+                    print_info_row("활동월", f"{p_year}년 {p_month}월")
+                    print_info_row("활동기간", str(p_range), is_new_line=True)
                     
-                    # 정보 테이블 외곽 굵은 테두리 덧칠 (투명 대신 style="D" 사용)
+                    # 외곽 굵은 테두리
                     end_y_info = pdf.get_y()
                     pdf.set_line_width(0.4)
-                    # [수정됨] style="D"는 Draw border only (No fill)을 의미함
                     pdf.rect(start_x_info, start_y_info, 180, end_y_info - start_y_info, style="D")
 
-                    # -----------------------------------------------------------------
-                    # [간격] 위 표와 아래 표 사이 5mm
-                    # -----------------------------------------------------------------
                     pdf.set_y(pdf.get_y() + 5)
 
                     # -----------------------------------------------------------------
-                    # 3. 레이아웃 치수 (4칸 고정)
+                    # 3. 레이아웃
                     # -----------------------------------------------------------------
-                    w_date = 12   # 일
-                    w_day = 12    # 요일
-                    w_remains = 180 - (w_date + w_day) # 156mm
-                    w_half = w_remains / 2 # 78mm
-                    w_cell = w_half / 4    # 19.5mm (4칸 고정)
+                    w_date = 12; w_day = 12
+                    w_remains = 180 - (w_date + w_day)
+                    w_half = w_remains / 2
+                    w_cell = w_half / 4
 
                     # -----------------------------------------------------------------
-                    # 4. 헤더 그리기 함수 (내부 0.12, 외곽 0.4)
+                    # 4. 헤더 (진하게)
                     # -----------------------------------------------------------------
                     def draw_header():
                         y_start = pdf.get_y()
-                        x_start = pdf.get_x() # 15mm
+                        x_start = pdf.get_x()
+                        h_row1 = 7; h_row2 = 7; h_total = 14
                         
-                        h_row1 = 7
-                        h_row2 = 7
-                        h_total = 14
-                        
-                        # [내부 얇은 선]
                         pdf.set_line_width(0.12)
-                        pdf.set_font("Nanum", "", 10)
+                        pdf.set_font("Nanum", "B", 10) # 헤더 전체 Bold
                         pdf.set_fill_color(235, 235, 235)
 
                         # 1행
@@ -885,74 +880,65 @@ else:
                         pdf.set_xy(x_start + w_date + w_day + w_half, y_start)
                         pdf.cell(w_half, h_row1, "활동 결과", border=1, align="C", fill=True)
                         
-                        # 2행: 해설사 이름 (4칸 고정)
+                        # 2행: 해설사 이름
                         y_row2 = y_start + h_row1
-                        pdf.set_font("Nanum", "", 8)
+                        pdf.set_font("Nanum", "B", 8) # 이름도 Bold
                         
-                        # 계획쪽 이름
                         base_x = x_start + w_date + w_day
                         for i in range(4):
                             u_name = display_users[i] if i < len(display_users) else ""
                             pdf.set_xy(base_x + (i * w_cell), y_row2)
                             pdf.cell(w_cell, h_row2, u_name, border=1, align="C", fill=True)
                             
-                        # 결과쪽 이름
                         base_x = x_start + w_date + w_day + w_half
                         for i in range(4):
                             u_name = display_users[i] if i < len(display_users) else ""
                             pdf.set_xy(base_x + (i * w_cell), y_row2)
                             pdf.cell(w_cell, h_row2, u_name, border=1, align="C", fill=True)
                         
-                        # [헤더 외곽 굵은 선] - 수정됨: style="D" 사용
                         pdf.set_line_width(0.4)
                         pdf.rect(x_start, y_start, 180, h_total, style="D")
-                        
-                        # 커서 복귀 및 선 굵기 초기화
                         pdf.set_xy(x_start, y_start + h_total)
                         pdf.set_line_width(0.12)
 
-                    # 첫 페이지 헤더 그리기
                     draw_header()
                     
                     # -----------------------------------------------------------------
-                    # 5. 본문 데이터 출력 (내부 0.12, 외곽 0.4)
+                    # 5. 본문 (날짜 진하게)
                     # -----------------------------------------------------------------
                     row_h = 8
-                    
-                    # [본문 외곽선용 시작점 저장]
                     body_start_y = pdf.get_y()
                     
                     for _, row in matrix_df.iterrows():
-                        # 페이지 넘김 체크 (하단 여백 10mm 고려)
                         if pdf.get_y() > 275:
-                            # 1. 현재 페이지 본문 굵은 테두리 마감 (수정됨: style="D")
                             current_y = pdf.get_y()
                             pdf.set_line_width(0.4)
                             pdf.rect(15, body_start_y, 180, current_y - body_start_y, style="D")
-                            pdf.set_line_width(0.12) # 복구
+                            pdf.set_line_width(0.12)
                             
-                            # 2. 페이지 추가
                             pdf.add_page()
                             draw_header()
-                            body_start_y = pdf.get_y() # 새 페이지 본문 시작점
+                            body_start_y = pdf.get_y()
 
                         y_curr = pdf.get_y()
-                        x_curr = pdf.get_x() # 15
+                        x_curr = pdf.get_x()
                         d_str = row['raw_date']
                         d_obj = datetime.strptime(d_str, "%Y-%m-%d")
 
-                        # 날짜 & 요일
-                        pdf.set_font("Nanum", "", 9)
+                        # [날짜 & 요일: 진하게]
+                        pdf.set_font("Nanum", "B", 9) # Bold
                         pdf.set_xy(x_curr, y_curr)
                         pdf.cell(w_date, row_h, str(d_obj.day), border=1, align="C")
                         pdf.set_xy(x_curr + w_date, y_curr)
                         pdf.cell(w_day, row_h, day_map[d_obj.weekday()], border=1, align="C")
 
-                        # 데이터 매핑 (4칸 고정)
+                        # [내용: 일반]
+                        pdf.set_font("Nanum", "", 8) # Regular
+
+                        # 데이터 매핑
                         plan_list = [""] * 4
                         res_list = [""] * 4
                         
-                        # 계획 데이터
                         for i in range(4):
                             if i < len(display_users):
                                 u = display_users[i]
@@ -962,15 +948,13 @@ else:
                                     if "기타" in s_t: t_str="기타"
                                     plan_list[i] = t_str
 
-                        # 결과 데이터
                         j_entries = []
                         if not journal_df.empty:
                             j_rows = journal_df[journal_df['날짜'] == d_str]
                             for _, jr in j_rows.iterrows():
-                                j_entries.append({"n": jr['이름'], "t": str(jr['활동시간'])+"H"})
+                                j_entries.append({"n": jr['이름'], "t": str(jr['활동시간']) + "H"})
                         
                         matched_indices = []
-                        # 1차: 본인
                         for i in range(4):
                             if i < len(display_users):
                                 owner = display_users[i]
@@ -980,21 +964,17 @@ else:
                                         matched_indices.append(k)
                                         break
                         
-                        # 2차: 대타
                         unmatched = [e for k, e in enumerate(j_entries) if k not in matched_indices]
                         empty_slots = [i for i in range(4) if res_list[i] == ""]
                         for k in range(min(len(unmatched), len(empty_slots))):
                             slot = empty_slots[k]
                             res_list[slot] = f"{unmatched[k]['n']}\n({unmatched[k]['t']})"
 
-                        # [출력 - 계획]
                         base_x = x_curr + w_date + w_day
-                        pdf.set_font("Nanum", "", 8)
                         for i in range(4):
                             pdf.set_xy(base_x + (i * w_cell), y_curr)
                             pdf.cell(w_cell, row_h, plan_list[i], border=1, align="C")
 
-                        # [출력 - 결과]
                         base_x = x_curr + w_date + w_day + w_half
                         for i in range(4):
                             c_x = base_x + (i * w_cell)
@@ -1012,13 +992,11 @@ else:
                         
                         pdf.set_xy(x_curr, y_curr + row_h)
 
-                    # [마지막 페이지 본문 굵은 테두리 마감] - 수정됨: style="D"
                     final_y = pdf.get_y()
                     pdf.set_line_width(0.4)
                     pdf.rect(15, body_start_y, 180, final_y - body_start_y, style="D")
                     pdf.set_line_width(0.12)
 
-                    # 서명
                     pdf.ln(5)
                     pdf.set_font("Nanum", "", 12)
                     pdf.cell(90, 10, "조장 :                         (인/서명)", align="C")
@@ -1038,7 +1016,7 @@ else:
                 pdf_data = create_pdf(target_place, special_note, arg_year, arg_month, arg_range, edited_matrix, display_users)
                 if pdf_data:
                     st.download_button("✅ 승인 및 운영계획서 다운로드", pdf_data, f"운영계획서_{target_place}_{arg_month}월.pdf", "application/pdf", on_click=approve_callback)
-
+                    
         # =================================================
         # 🟡 [화면 분기] 역할에 따른 화면 표시
         # =================================================
@@ -1051,5 +1029,6 @@ else:
         else:
             # 관리자
             render_team_approval(p_year, p_month, p_range) # 인자 전달
+
 
 
