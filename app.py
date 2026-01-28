@@ -35,7 +35,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수 (안전장치 강화됨)
+# 2. 데이터 함수
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -56,22 +56,19 @@ def load_data(sheet_name, year=None, month=None, island=None):
         sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         data = sh.get_all_records()
         
-        # [수정] 데이터가 없으면 필수 컬럼을 포함한 빈 DF 반환 (KeyError 방지)
         if not data:
-            return pd.DataFrame(columns=['날짜', '이름', '장소', '활동시간', '대타여부', '기존해설사', '섬', '년', '월'])
+            return pd.DataFrame(columns=['날짜', '이름', '장소', '활동시간', '대타여부', '기존해설사', '섬', '년', '월', '상태'])
         
         df = pd.DataFrame(data)
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # [수정] 필수 컬럼이 없으면 강제로 생성
         required_cols = ['날짜', '이름', '장소', '활동시간', '대타여부', '기존해설사', '상태']
         for c in required_cols:
             if c not in df.columns: df[c] = ""
 
         if '날짜' in df.columns:
             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-            # 날짜 변환 실패(NaT) 데이터 제거
             df = df.dropna(subset=['날짜'])
             
             df['_y'] = df['날짜'].dt.year
@@ -86,7 +83,6 @@ def load_data(sheet_name, year=None, month=None, island=None):
             
         return df
     except Exception as e:
-        # 에러 시 빈 DF 반환 (화면 멈춤 방지)
         return pd.DataFrame(columns=['날짜', '이름', '장소', '활동시간'])
 
 def save_data(sheet_name, new_rows, header_list):
@@ -157,11 +153,11 @@ def get_display_data(df_plan, df_log, date_list):
     """
     disp_rows = []
     
-    # df_log가 비어있어도 컬럼 접근 시 에러 안 나도록 처리
     if df_log.empty and '날짜' not in df_log.columns:
         df_log['날짜'] = []
     
     for d in date_list:
+        # [수정] 날짜 형식 통일
         if isinstance(d, str):
             d_obj = datetime.strptime(d, "%Y-%m-%d")
         else:
@@ -185,19 +181,21 @@ def get_display_data(df_plan, df_log, date_list):
             subs = day_plans[day_plans['대타여부'] == 'O']
             origs = day_plans[day_plans['대타여부'] != 'O']
         
-        # 3. 슬롯 구성
+        # 3. 슬롯 구성 (계획에는 '기존해설사'가 우선 표시됨)
         final_slots = []
         replaced_planners = []
         
+        # (1) 대타 기록 먼저
         if not subs.empty:
             replaced_planners = subs['기존해설사'].unique().tolist()
             for _, r in subs.iterrows():
                 final_slots.append({
-                    'plan_name': r['기존해설사'], 
-                    'worker_name': r['이름'],
+                    'plan_name': r['기존해설사'], # 계획: 원주인
+                    'worker_name': r['이름'],     # 결과매칭대상: 대타
                     'is_sub': True
                 })
             
+        # (2) 원본 기록 (대체 안 된 사람)
         if not origs.empty:
             for _, r in origs.iterrows():
                 my_name = r['이름']
@@ -221,8 +219,8 @@ def get_display_data(df_plan, df_log, date_list):
             
             if i < len(final_slots):
                 slot = final_slots[i]
-                p_val = slot['plan_name'] # 계획란
-                target_worker = slot['worker_name'] # 일할 사람
+                p_val = slot['plan_name'] # 계획란 표시
+                target_worker = slot['worker_name'] # 실제 일해야 할 사람
                 
                 # 로그 찾기
                 if not day_logs.empty:
@@ -230,8 +228,10 @@ def get_display_data(df_plan, df_log, date_list):
                         if idx not in used_log_indices and log['이름'] == target_worker:
                             t_val = str(log.get('활동시간', ''))
                             if slot['is_sub']:
+                                # 대타가 했으면 이름+시간
                                 r_val = f"{target_worker}({t_val}H)"
                             else:
+                                # 본인이 했으면 시간만
                                 r_val = f"{t_val}H"
                             used_log_indices.add(idx)
                             break
@@ -293,10 +293,8 @@ def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows
         pdf.set_font("Nanum", "", 7)
 
         bx = xc + 24
-        # 계획
         for i in range(4):
             pdf.set_xy(bx+(i*w_c), yc); pdf.cell(w_c, row_h, row.get(f"plan_{i}", ""), 1, 0, 'C')
-        # 결과
         bx += w_h
         for i in range(4):
             pdf.set_xy(bx+(i*w_c), yc)
@@ -522,7 +520,6 @@ def ui_view_plan(scope, name, island, role=""):
     
     if sel_place:
         df_plan = df_plan[df_plan['장소'] == sel_place]
-        # [수정] 운영일지 컬럼 존재 여부 체크
         if not df_log.empty and '장소' in df_log.columns:
             df_log = df_log[df_log['장소'] == sel_place]
     
@@ -621,8 +618,9 @@ def ui_approve(island, role):
     with c5: note = st.text_input("특이사항", key="ap_n")
     
     _, last = calendar.monthrange(py, pm)
-    dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
-    dates_str = [d.strftime("%Y-%m-%d") for d in dates]
+    # [수정] 날짜 리스트 생성 시 datetime 객체로 유지 (strftime 미리 호출 X)
+    dates = [datetime(py, pm, d) for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
+    dates_str = [d.strftime("%Y-%m-%d") for d in dates] # 필터링용 문자열
     
     df = load_data("활동계획", py, pm, tis)
     if not df.empty: df = df[df['장소'] == tpl]
