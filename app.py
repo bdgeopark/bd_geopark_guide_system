@@ -35,7 +35,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수
+# 2. 데이터 함수 (안전장치 강화됨)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -55,19 +55,28 @@ def load_data(sheet_name, year=None, month=None, island=None):
     try:
         sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         data = sh.get_all_records()
-        if not data: return pd.DataFrame()
+        
+        # [수정] 데이터가 없으면 필수 컬럼을 포함한 빈 DF 반환 (KeyError 방지)
+        if not data:
+            return pd.DataFrame(columns=['날짜', '이름', '장소', '활동시간', '대타여부', '기존해설사', '섬', '년', '월'])
         
         df = pd.DataFrame(data)
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        for c in ['대타여부', '기존해설사', '상태']:
+        # [수정] 필수 컬럼이 없으면 강제로 생성
+        required_cols = ['날짜', '이름', '장소', '활동시간', '대타여부', '기존해설사', '상태']
+        for c in required_cols:
             if c not in df.columns: df[c] = ""
 
         if '날짜' in df.columns:
             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+            # 날짜 변환 실패(NaT) 데이터 제거
+            df = df.dropna(subset=['날짜'])
+            
             df['_y'] = df['날짜'].dt.year
             df['_m'] = df['날짜'].dt.month
+            
             if year: df = df[df['_y'] == int(year)]
             if month: df = df[df['_m'] == int(month)]
             df = df.drop(columns=['_y', '_m'])
@@ -76,7 +85,9 @@ def load_data(sheet_name, year=None, month=None, island=None):
             df = df[df['섬'] == island]
             
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        # 에러 시 빈 DF 반환 (화면 멈춤 방지)
+        return pd.DataFrame(columns=['날짜', '이름', '장소', '활동시간'])
 
 def save_data(sheet_name, new_rows, header_list):
     try:
@@ -93,7 +104,6 @@ def save_data(sheet_name, new_rows, header_list):
         old_df.columns = [str(c).strip() for c in old_df.columns]
         if '일자' in old_df.columns: old_df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 키 생성: 날짜+이름+장소
         def make_key(d):
             return str(d.get('날짜','')) + str(d.get('이름','')) + str(d.get('장소',''))
 
@@ -139,40 +149,46 @@ def get_users(island):
     except: return []
 
 # =========================================================
-# 3. PDF 및 데이터 가공 로직 (요일 에러 수정됨)
+# 3. PDF 및 데이터 가공 로직
 # =========================================================
 def get_display_data(df_plan, df_log, date_list):
     """
     화면/PDF 표시용 데이터 생성
-    [수정] 요일 계산 시 문자열을 datetime으로 변환하는 로직 추가
     """
     disp_rows = []
     
+    # df_log가 비어있어도 컬럼 접근 시 에러 안 나도록 처리
+    if df_log.empty and '날짜' not in df_log.columns:
+        df_log['날짜'] = []
+    
     for d in date_list:
-        # [수정] d가 문자열인지 확인하고 변환
         if isinstance(d, str):
             d_obj = datetime.strptime(d, "%Y-%m-%d")
         else:
             d_obj = d
             
         d_str = d_obj.strftime("%Y-%m-%d")
-        w_day = DAY_MAP[d_obj.weekday()] # 이제 여기서 에러 안 남
+        w_day = DAY_MAP[d_obj.weekday()]
         
         row_dat = {"날짜": d_str, "요일": w_day}
         
-        # 1. 해당 날짜 계획 가져오기
-        # df_plan['날짜']는 datetime 객체임
-        day_plans = df_plan[df_plan['날짜'] == pd.to_datetime(d_str)]
+        # 1. 계획 가져오기
+        if not df_plan.empty:
+            day_plans = df_plan[df_plan['날짜'] == pd.to_datetime(d_str)]
+        else:
+            day_plans = pd.DataFrame()
         
         # 2. 대타/원본 분리
-        subs = day_plans[day_plans['대타여부'] == 'O']
-        origs = day_plans[day_plans['대타여부'] != 'O']
+        subs = pd.DataFrame()
+        origs = pd.DataFrame()
+        if not day_plans.empty:
+            subs = day_plans[day_plans['대타여부'] == 'O']
+            origs = day_plans[day_plans['대타여부'] != 'O']
         
         # 3. 슬롯 구성
         final_slots = []
         replaced_planners = []
         
-        # 대타 먼저
         if not subs.empty:
             replaced_planners = subs['기존해설사'].unique().tolist()
             for _, r in subs.iterrows():
@@ -182,7 +198,6 @@ def get_display_data(df_plan, df_log, date_list):
                     'is_sub': True
                 })
             
-        # 원본 (대체되지 않은 사람만)
         if not origs.empty:
             for _, r in origs.iterrows():
                 my_name = r['이름']
@@ -193,8 +208,11 @@ def get_display_data(df_plan, df_log, date_list):
                         'is_sub': False
                     })
         
-        # 4. 실적(로그)
-        day_logs = df_log[df_log['날짜'] == pd.to_datetime(d_str)]
+        # 4. 실적 매칭
+        day_logs = pd.DataFrame()
+        if not df_log.empty:
+            day_logs = df_log[df_log['날짜'] == pd.to_datetime(d_str)]
+            
         used_log_indices = set()
         
         for i in range(4):
@@ -203,21 +221,20 @@ def get_display_data(df_plan, df_log, date_list):
             
             if i < len(final_slots):
                 slot = final_slots[i]
-                p_val = slot['plan_name'] # 계획란 (원래주인)
-                target_worker = slot['worker_name'] # 수행해야 할 사람
+                p_val = slot['plan_name'] # 계획란
+                target_worker = slot['worker_name'] # 일할 사람
                 
-                # 로그 매칭
-                found = False
-                for idx, log in day_logs.iterrows():
-                    if idx not in used_log_indices and log['이름'] == target_worker:
-                        t_val = str(log.get('활동시간', ''))
-                        if slot['is_sub']:
-                            r_val = f"{target_worker}({t_val}H)"
-                        else:
-                            r_val = f"{t_val}H"
-                        used_log_indices.add(idx)
-                        found = True
-                        break
+                # 로그 찾기
+                if not day_logs.empty:
+                    for idx, log in day_logs.iterrows():
+                        if idx not in used_log_indices and log['이름'] == target_worker:
+                            t_val = str(log.get('활동시간', ''))
+                            if slot['is_sub']:
+                                r_val = f"{target_worker}({t_val}H)"
+                            else:
+                                r_val = f"{t_val}H"
+                            used_log_indices.add(idx)
+                            break
             
             row_dat[p_key] = p_val
             row_dat[r_key] = r_val
@@ -276,8 +293,10 @@ def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows
         pdf.set_font("Nanum", "", 7)
 
         bx = xc + 24
+        # 계획
         for i in range(4):
             pdf.set_xy(bx+(i*w_c), yc); pdf.cell(w_c, row_h, row.get(f"plan_{i}", ""), 1, 0, 'C')
+        # 결과
         bx += w_h
         for i in range(4):
             pdf.set_xy(bx+(i*w_c), yc)
@@ -503,6 +522,7 @@ def ui_view_plan(scope, name, island, role=""):
     
     if sel_place:
         df_plan = df_plan[df_plan['장소'] == sel_place]
+        # [수정] 운영일지 컬럼 존재 여부 체크
         if not df_log.empty and '장소' in df_log.columns:
             df_log = df_log[df_log['장소'] == sel_place]
     
@@ -602,7 +622,7 @@ def ui_approve(island, role):
     
     _, last = calendar.monthrange(py, pm)
     dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
-    dates_str = [d.strftime("%Y-%m-%d") for d in dates] # 승인 저장용 문자열 리스트
+    dates_str = [d.strftime("%Y-%m-%d") for d in dates]
     
     df = load_data("활동계획", py, pm, tis)
     if not df.empty: df = df[df['장소'] == tpl]
@@ -619,32 +639,17 @@ def ui_approve(island, role):
     c_btn1, c_btn2 = st.columns(2)
     with c_btn1:
         if st.button("💾 승인 저장"):
-            # [수정] DB 원본을 불러와서 상태값 업데이트 후 재저장
             try:
-                # 1. 원본 로드
                 raw_df = load_data("활동계획", py, pm, tis)
                 if raw_df.empty:
                     st.warning("저장할 데이터가 없습니다.")
                 else:
-                    # 2. 조건에 맞는 행만 '승인완료'로 변경
-                    # 조건: 장소가 일치하고, 날짜가 선택된 기간(dates_str)에 포함되는 행
-                    # 날짜 형변환 (비교를 위해)
                     raw_df['d_temp'] = raw_df['날짜'].dt.strftime("%Y-%m-%d")
-                    
-                    # 마스크 생성
                     mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str))
-                    
-                    # 업데이트
                     raw_df.loc[mask, '상태'] = "승인완료"
                     
-                    # 3. 저장 형식으로 변환 (리스트)
                     save_rows = []
-                    # 저장 함수가 기대하는 컬럼 순서
-                    # ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
-                    
                     for _, r in raw_df.iterrows():
-                        # 해당되는 행은 업데이트된 상태로, 나머지는 그대로 저장
-                        # load_data가 날짜를 datetime으로 바꿨으니 다시 문자열로
                         d_s = r['날짜'].strftime("%Y-%m-%d")
                         row = [
                             d_s, r['섬'], r['장소'], r['이름'], r['활동여부'], r['비고'], 
@@ -653,16 +658,10 @@ def ui_approve(island, role):
                         ]
                         save_rows.append(row)
                     
-                    # 4. 전체 덮어쓰기 (save_data 대신 시트 클리어 후 업데이트)
-                    # save_data는 append/update 방식이라 여기선 부적합할 수 있음(전체 상태 변경이므로)
-                    # 하지만 save_data가 key 기반이므로, key가 같으면 덮어씀.
-                    # 여기선 전체 데이터를 다시 밀어넣는게 안전.
-                    
                     sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
                     cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                     sh.clear()
                     sh.update([cols] + save_rows)
-                    
                     st.success("✅ 승인 상태가 저장되었습니다!")
             except Exception as e:
                 st.error(f"저장 중 오류 발생: {e}")
