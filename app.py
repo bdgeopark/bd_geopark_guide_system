@@ -157,7 +157,6 @@ def get_display_data(df_plan, df_log, date_list):
         df_log['날짜'] = []
     
     for d in date_list:
-        # [수정] 날짜 형식 통일
         if isinstance(d, str):
             d_obj = datetime.strptime(d, "%Y-%m-%d")
         else:
@@ -181,21 +180,19 @@ def get_display_data(df_plan, df_log, date_list):
             subs = day_plans[day_plans['대타여부'] == 'O']
             origs = day_plans[day_plans['대타여부'] != 'O']
         
-        # 3. 슬롯 구성 (계획에는 '기존해설사'가 우선 표시됨)
+        # 3. 슬롯 구성
         final_slots = []
         replaced_planners = []
         
-        # (1) 대타 기록 먼저
         if not subs.empty:
             replaced_planners = subs['기존해설사'].unique().tolist()
             for _, r in subs.iterrows():
                 final_slots.append({
-                    'plan_name': r['기존해설사'], # 계획: 원주인
-                    'worker_name': r['이름'],     # 결과매칭대상: 대타
+                    'plan_name': r['기존해설사'], 
+                    'worker_name': r['이름'],
                     'is_sub': True
                 })
             
-        # (2) 원본 기록 (대체 안 된 사람)
         if not origs.empty:
             for _, r in origs.iterrows():
                 my_name = r['이름']
@@ -219,8 +216,8 @@ def get_display_data(df_plan, df_log, date_list):
             
             if i < len(final_slots):
                 slot = final_slots[i]
-                p_val = slot['plan_name'] # 계획란 표시
-                target_worker = slot['worker_name'] # 실제 일해야 할 사람
+                p_val = slot['plan_name']
+                target_worker = slot['worker_name']
                 
                 # 로그 찾기
                 if not day_logs.empty:
@@ -228,10 +225,8 @@ def get_display_data(df_plan, df_log, date_list):
                         if idx not in used_log_indices and log['이름'] == target_worker:
                             t_val = str(log.get('활동시간', ''))
                             if slot['is_sub']:
-                                # 대타가 했으면 이름+시간
                                 r_val = f"{target_worker}({t_val}H)"
                             else:
-                                # 본인이 했으면 시간만
                                 r_val = f"{t_val}H"
                             used_log_indices.add(idx)
                             break
@@ -554,7 +549,8 @@ def ui_view_plan(scope, name, island, role=""):
         }
     )
     
-    if scope in ["team", "all"] and disp_rows:
+    # [수정] 조원(scope="me")도 계획 수정을 할 수 있도록 조건 완화
+    if disp_rows:
         st.divider()
         st.subheader("🛠️ 계획 수정")
         with st.expander("수정 메뉴", expanded=True):
@@ -571,12 +567,14 @@ def ui_view_plan(scope, name, island, role=""):
             new_u = None
             if "대타" in act:
                 all_u = get_users(t_isl)
+                # 본인 제외
                 new_u = st.selectbox("교체 해설사", [u for u in all_u if u != target_u], key="md_n")
             
             if st.button("적용"):
                 try:
                     tr = day_p[day_p['이름']==target_u].iloc[0]
                     t_place = tr['장소']; t_stat = tr['활동여부']
+                    
                     origin = tr.get('기존해설사', '')
                     if not origin: origin = target_u 
                     
@@ -596,6 +594,7 @@ def ui_view_plan(scope, name, island, role=""):
                         ald.columns = [str(c).strip() for c in ald.columns]
                         if '일자' in ald.columns: ald.rename(columns={'일자': '날짜'}, inplace=True)
                         ald['d_str'] = pd.to_datetime(ald['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                        
                         mask = (ald['d_str']==target_d) & (ald['이름']==target_u) & (ald['장소']==t_place)
                         rem = ald[~mask].drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
@@ -618,9 +617,8 @@ def ui_approve(island, role):
     with c5: note = st.text_input("특이사항", key="ap_n")
     
     _, last = calendar.monthrange(py, pm)
-    # [수정] 날짜 리스트 생성 시 datetime 객체로 유지 (strftime 미리 호출 X)
     dates = [datetime(py, pm, d) for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
-    dates_str = [d.strftime("%Y-%m-%d") for d in dates] # 필터링용 문자열
+    dates_str = [d.strftime("%Y-%m-%d") for d in dates]
     
     df = load_data("활동계획", py, pm, tis)
     if not df.empty: df = df[df['장소'] == tpl]
