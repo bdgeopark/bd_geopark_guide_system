@@ -145,11 +145,13 @@ def get_users(island):
     except: return []
 
 # =========================================================
-# 3. PDF 및 데이터 가공 로직
+# 3. PDF 및 데이터 가공 로직 (핵심 수정)
 # =========================================================
 def get_display_data(df_plan, df_log, date_list):
     """
-    화면/PDF 표시용 데이터 생성
+    [수정된 로직]
+    1. 계획: 대타가 있으면 '~~기존~~ 대타' 형태로 표시 (일지 유무 상관없이)
+    2. 결과: 일지(Log)가 있을 때만 표시
     """
     disp_rows = []
     
@@ -167,43 +169,40 @@ def get_display_data(df_plan, df_log, date_list):
         
         row_dat = {"날짜": d_str, "요일": w_day}
         
-        # 1. 계획 가져오기
+        # 1. 해당 날짜 모든 계획 가져오기
         if not df_plan.empty:
-            day_plans = df_plan[df_plan['날짜'] == pd.to_datetime(d_str)]
+            day_plans_all = df_plan[df_plan['날짜'] == pd.to_datetime(d_str)]
         else:
-            day_plans = pd.DataFrame()
+            day_plans_all = pd.DataFrame()
         
-        # 2. 대타/원본 분리
-        subs = pd.DataFrame()
-        origs = pd.DataFrame()
-        if not day_plans.empty:
-            subs = day_plans[day_plans['대타여부'] == 'O']
-            origs = day_plans[day_plans['대타여부'] != 'O']
-        
-        # 3. 슬롯 구성
+        # 2. 우선순위 정리 (대타 기록이 있는 경우, 해당 기존해설사의 원래 기록은 무시)
         final_slots = []
-        replaced_planners = []
         
-        if not subs.empty:
+        # 대타 기록 찾기
+        if not day_plans_all.empty:
+            subs = day_plans_all[day_plans_all['대타여부'] == 'O']
+            # 대타에 의해 대체된 원주인 목록
             replaced_planners = subs['기존해설사'].unique().tolist()
+            
+            # (1) 대타 기록 처리
             for _, r in subs.iterrows():
                 final_slots.append({
-                    'plan_name': r['기존해설사'], 
-                    'worker_name': r['이름'],
+                    'plan_display': f"~~{r['기존해설사']}~~ {r['이름']}", # 취소선 효과 텍스트
+                    'worker_name': r['이름'],     # 실제 일할 사람 (대타)
                     'is_sub': True
                 })
-            
-        if not origs.empty:
+                
+            # (2) 나머지 일반 계획 처리
+            origs = day_plans_all[day_plans_all['대타여부'] != 'O']
             for _, r in origs.iterrows():
-                my_name = r['이름']
-                if my_name not in replaced_planners:
+                if r['이름'] not in replaced_planners: # 대체되지 않은 사람만
                     final_slots.append({
-                        'plan_name': my_name,
-                        'worker_name': my_name,
+                        'plan_display': r['이름'],
+                        'worker_name': r['이름'],
                         'is_sub': False
                     })
         
-        # 4. 실적 매칭
+        # 4. 실적 매칭 (로그가 있을 때만!)
         day_logs = pd.DataFrame()
         if not df_log.empty:
             day_logs = df_log[df_log['날짜'] == pd.to_datetime(d_str)]
@@ -216,13 +215,14 @@ def get_display_data(df_plan, df_log, date_list):
             
             if i < len(final_slots):
                 slot = final_slots[i]
-                p_val = slot['plan_name']
-                target_worker = slot['worker_name']
+                p_val = slot['plan_display'] # 계획란: "~~기존~~ 대타"
+                target_worker = slot['worker_name'] # 결과란에 찾아야 할 사람
                 
                 # 로그 찾기
                 if not day_logs.empty:
                     for idx, log in day_logs.iterrows():
                         if idx not in used_log_indices and log['이름'] == target_worker:
+                            # 로그가 있어야만 표시!
                             t_val = str(log.get('활동시간', ''))
                             if slot['is_sub']:
                                 r_val = f"{target_worker}({t_val}H)"
@@ -288,8 +288,28 @@ def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows
         pdf.set_font("Nanum", "", 7)
 
         bx = xc + 24
+        # 계획
         for i in range(4):
-            pdf.set_xy(bx+(i*w_c), yc); pdf.cell(w_c, row_h, row.get(f"plan_{i}", ""), 1, 0, 'C')
+            pdf.set_xy(bx+(i*w_c), yc)
+            # 텍스트 처리: '~~이름~~ 대타'를 줄바꿈 등으로 표현
+            raw_txt = row.get(f"plan_{i}", "")
+            # ~~ 표시 제거하고 (취소) 텍스트로 변환 (PDF 가독성 위해)
+            if "~~" in raw_txt:
+                parts = raw_txt.split("~~") # ['', '기존', ' 대타']
+                if len(parts) >= 3:
+                    final_txt = f"(취소){parts[1]}\n{parts[2].strip()}"
+                else: final_txt = raw_txt
+            else:
+                final_txt = raw_txt
+                
+            if "\n" in final_txt:
+                pdf.multi_cell(w_c, 4, final_txt, 1, 'C')
+                # multi_cell 후 위치 보정
+                pdf.set_xy(bx+(i*w_c), yc); pdf.rect(bx+(i*w_c), yc, w_c, row_h)
+            else:
+                pdf.cell(w_c, row_h, final_txt, 1, 0, 'C')
+                
+        # 결과
         bx += w_h
         for i in range(4):
             pdf.set_xy(bx+(i*w_c), yc)
@@ -515,6 +535,7 @@ def ui_view_plan(scope, name, island, role=""):
     
     if sel_place:
         df_plan = df_plan[df_plan['장소'] == sel_place]
+        # [수정] 운영일지 컬럼 존재 여부 체크
         if not df_log.empty and '장소' in df_log.columns:
             df_log = df_log[df_log['장소'] == sel_place]
     
@@ -549,8 +570,7 @@ def ui_view_plan(scope, name, island, role=""):
         }
     )
     
-    # [수정] 조원(scope="me")도 계획 수정을 할 수 있도록 조건 완화
-    if disp_rows:
+    if scope in ["team", "all"] and disp_rows:
         st.divider()
         st.subheader("🛠️ 계획 수정")
         with st.expander("수정 메뉴", expanded=True):
@@ -567,7 +587,6 @@ def ui_view_plan(scope, name, island, role=""):
             new_u = None
             if "대타" in act:
                 all_u = get_users(t_isl)
-                # 본인 제외
                 new_u = st.selectbox("교체 해설사", [u for u in all_u if u != target_u], key="md_n")
             
             if st.button("적용"):
@@ -594,7 +613,6 @@ def ui_view_plan(scope, name, island, role=""):
                         ald.columns = [str(c).strip() for c in ald.columns]
                         if '일자' in ald.columns: ald.rename(columns={'일자': '날짜'}, inplace=True)
                         ald['d_str'] = pd.to_datetime(ald['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
-                        
                         mask = (ald['d_str']==target_d) & (ald['이름']==target_u) & (ald['장소']==t_place)
                         rem = ald[~mask].drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
@@ -617,8 +635,9 @@ def ui_approve(island, role):
     with c5: note = st.text_input("특이사항", key="ap_n")
     
     _, last = calendar.monthrange(py, pm)
+    # [수정] 날짜 리스트 생성 시 datetime 객체로 유지 (strftime 미리 호출 X)
     dates = [datetime(py, pm, d) for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
-    dates_str = [d.strftime("%Y-%m-%d") for d in dates]
+    dates_str = [d.strftime("%Y-%m-%d") for d in dates] # 필터링용 문자열
     
     df = load_data("활동계획", py, pm, tis)
     if not df.empty: df = df[df['장소'] == tpl]
