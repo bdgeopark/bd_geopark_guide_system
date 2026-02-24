@@ -36,7 +36,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수 (캐싱 적용됨)
+# 2. 데이터 함수 (캐싱 적용으로 속도 향상 및 오류 방지)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -52,7 +52,6 @@ def get_client():
 
 client = get_client()
 
-# [핵심 수정] 데이터를 60초간 임시 저장하여 구글 API 제한 방지 및 속도 향상
 @st.cache_data(ttl=60, show_spinner=False)
 def load_data(sheet_name, year=None, month=None, island=None):
     try:
@@ -133,9 +132,7 @@ def save_data(sheet_name, new_rows, header_list):
             
         sh.clear()
         sh.update([combined.columns.values.tolist()] + combined.values.tolist())
-        
-        # [핵심 수정] 저장 후 캐시 비우기 (최신 데이터 반영)
-        st.cache_data.clear()
+        st.cache_data.clear() # 캐시 초기화
         return True
     except Exception as e:
         st.error(f"저장 오류: {e}")
@@ -145,6 +142,7 @@ def save_daily_report(act_row, op_row):
     try:
         doc = client.open(SPREADSHEET_NAME)
         
+        # 1. 활동일지 저장
         act_cols = ["날짜", "섬", "장소", "이름", "활동시간", "활동내용", "청취자수", "해설횟수", "타임스탬프", "년", "월"]
         try: sh_act = doc.worksheet("활동일지")
         except: 
@@ -173,6 +171,7 @@ def save_daily_report(act_row, op_row):
         sh_act.clear()
         sh_act.update([df_act.columns.values.tolist()] + df_act.values.tolist())
         
+        # 2. 운영일지 저장 (탐방객 보정)
         op_cols = ["날짜", "섬", "장소", "탐방객수", "특이사항", "타임스탬프", "년", "월"]
         try: sh_op = doc.worksheet("운영일지")
         except: 
@@ -220,8 +219,7 @@ def save_daily_report(act_row, op_row):
         sh_op.clear()
         sh_op.update([df_op.columns.values.tolist()] + df_op.values.tolist())
         
-        # [핵심 수정] 저장 후 캐시 비우기
-        st.cache_data.clear()
+        st.cache_data.clear() # 캐시 초기화
         return True
     except Exception as e:
         st.error(f"일지 저장 중 오류 발생: {e}")
@@ -289,6 +287,7 @@ def get_display_data(df_plan, df_log, date_list):
     return disp_rows
 
 def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows, current_island):
+    """안내소 운영계획서 PDF 생성"""
     font_path = "NanumGothic.ttf"
     if not os.path.exists(font_path): st.error("폰트 없음"); return None
 
@@ -361,6 +360,66 @@ def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows
     pdf.ln(5); pdf.set_font("Nanum", "", 12)
     pdf.cell(90, 10, "조장 :                         (인/서명)", 0, 0, 'C')
     pdf.cell(90, 10, "면 담당 :                         (인/서명)", 0, 1, 'C')
+    return bytes(pdf.output())
+
+# [추가] 활동조회(운영일지) 전용 PDF 생성 함수
+def generate_journal_pdf(df, p_year, p_month, p_island):
+    font_path = "NanumGothic.ttf"
+    if not os.path.exists(font_path): return None
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_margins(15, 15, 15)
+    pdf.set_auto_page_break(True, margin=15)
+    pdf.add_page()
+    pdf.add_font("Nanum", "", font_path)
+    pdf.add_font("Nanum", "B", font_path)
+
+    # 타이틀
+    pdf.set_font("Nanum", "B", 18)
+    title_str = f"{p_year}년 {p_month}월 활동 및 운영일지"
+    if p_island: title_str = f"[{p_island}] " + title_str
+    pdf.cell(180, 12, title_str, 0, 1, 'C')
+    pdf.ln(3)
+
+    # 헤더
+    pdf.set_font("Nanum", "B", 9)
+    pdf.set_fill_color(235, 235, 235)
+    cols = [("날짜", 22), ("장소", 32), ("성명", 18), ("시간", 12), ("탐방", 12), ("청취", 12), ("내용 및 특이사항", 72)]
+    for c, w in cols:
+        pdf.cell(w, 8, c, 1, 0, 'C', True)
+    pdf.ln()
+
+    # 데이터
+    pdf.set_font("Nanum", "", 8)
+    if df.empty:
+        pdf.cell(180, 10, "조건에 맞는 데이터가 없습니다.", 1, 1, 'C')
+    else:
+        for _, r in df.iterrows():
+            d_str = str(r.get('날짜', ''))[:10]
+            place = str(r.get('장소', ''))[:12] # 글자수 제한 (표 깨짐 방지)
+            name = str(r.get('이름', ''))[:6]
+            time_val = str(r.get('활동시간', ''))
+            vis = str(r.get('탐방객수', ''))
+            lis = str(r.get('청취자수', ''))
+            
+            act = str(r.get('활동내용', ''))
+            note = str(r.get('특이사항', ''))
+            combined_note = ""
+            if act: combined_note += f"[{act}] "
+            if note: combined_note += note
+            
+            # 긴 텍스트 자르기 (가독성 유지)
+            if len(combined_note) > 35:
+                combined_note = combined_note[:33] + "..."
+            
+            pdf.cell(22, 8, d_str, 1, 0, 'C')
+            pdf.cell(32, 8, place, 1, 0, 'C')
+            pdf.cell(18, 8, name, 1, 0, 'C')
+            pdf.cell(12, 8, time_val, 1, 0, 'C')
+            pdf.cell(12, 8, vis, 1, 0, 'C')
+            pdf.cell(12, 8, lis, 1, 0, 'C')
+            pdf.cell(72, 8, combined_note, 1, 1, 'L')
+
     return bytes(pdf.output())
 
 # =========================================================
@@ -515,6 +574,17 @@ def ui_view_journal(scope, name, island):
     st.dataframe(df_merged[display_cols], use_container_width=True, hide_index=True, column_config={
         "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
     })
+    
+    # [새로 추가된 기능] 활동 및 운영일지 다운로드 (CSV & PDF)
+    st.divider()
+    c_dl1, c_dl2 = st.columns(2)
+    with c_dl1:
+        csv_data = df_merged[display_cols].to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📊 엑셀(CSV) 다운로드", csv_data, f"운영일지_{vy}년{vm}월.csv", "text/csv", use_container_width=True)
+    with c_dl2:
+        journal_pdf = generate_journal_pdf(df_merged, vy, vm, t_isl)
+        if journal_pdf:
+            st.download_button("📥 PDF 다운로드", journal_pdf, f"운영일지_{vy}년{vm}월.pdf", "application/pdf", use_container_width=True)
 
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
@@ -690,7 +760,6 @@ def ui_view_plan(scope, name, island, role=""):
                         ald.loc[mask, '상태'] = '취소대기'
                         rem = ald.drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
-                        
                         st.cache_data.clear() # 캐시 초기화
                         st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
                         
@@ -757,7 +826,6 @@ def ui_approve(island, role):
                     cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                     sh.clear()
                     sh.update([cols] + save_rows)
-                    
                     st.cache_data.clear() # 캐시 초기화
                     st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                     time.sleep(1.5); st.rerun()
@@ -767,8 +835,7 @@ def ui_approve(island, role):
     with c_btn2:
         pdf_data = generate_pdf(tpl, note, py, pm, pr, disp_rows, tis)
         if pdf_data:
-            # 다운로드 버튼 클릭 시 새로고침 오류 방지를 위해 key 추가
-            st.download_button("📥 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf", key="pdf_dl_btn")
+            st.download_button("📥 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf")
 
 def ui_stats():
     st.header("📊 통계")
