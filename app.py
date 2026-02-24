@@ -850,10 +850,13 @@ def main():
                     if found:
                         st.session_state['logged_in'] = True
                         st.session_state['user_info'] = found
-                        st.success(f"{found['이름']}님 환영합니다!")
-                        time.sleep(0.5); st.rerun()
-                    else: st.error("로그인 실패")
-                except: st.error("서버 연결 실패")
+                        # st.success 메시지와 sleep을 빼고 바로 새로고침하여 에러 방지 및 속도 향상
+                        st.rerun()
+                    else: 
+                        st.error("로그인 실패: 아이디 또는 비밀번호를 확인해주세요.")
+                # [핵심 수정] 무조건적인 except: 대신 Exception을 명시하여 st.rerun() 충돌 방지
+                except Exception as e: 
+                    st.error("구글 서버 연결 실패. 잠시 후 다시 시도해주세요.")
     else:
         user = st.session_state['user_info']
         name = user['이름']
@@ -867,7 +870,7 @@ def main():
                 
         if role == "관리자":
             t1, t2, t3, t4 = st.tabs(["🔍 활동조회", "🗓️ 계획조회", "📊 통계", "✅ 계획승인"])
-            with t1: ui_view_journal("all", name, island, role)
+            with t1: ui_view_journal("all", name, island)
             with t2: ui_view_plan("all", name, island, role)
             with t3: ui_stats()
             with t4: ui_approve(island, role)
@@ -875,7 +878,7 @@ def main():
         elif role == "조장":
             t1, t2, t3, t4, t5 = st.tabs(["📝 일지작성", "🔍 활동조회", "🗓️ 계획조회", "✍️ 계획입력", "✅ 계획승인"])
             with t1: ui_journal_write(name, island)
-            with t2: ui_view_journal("team", name, island, role)
+            with t2: ui_view_journal("team", name, island)
             with t3: ui_view_plan("team", name, island, role)
             with t4: ui_plan_input(name, island)
             with t5: ui_approve(island, role)
@@ -883,7 +886,7 @@ def main():
         else: # 조원
             t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동", "🗓️ 내 계획", "✍️ 계획입력"])
             with t1: ui_journal_write(name, island)
-            with t2: ui_view_journal("me", name, island, role)
+            with t2: ui_view_journal("me", name, island)
             with t3: ui_view_plan("me", name, island, role)
             with t4: ui_plan_input(name, island)
 
