@@ -635,7 +635,8 @@ def ui_view_plan(scope, name, island, role=""):
         }
     )
     
-    if scope in ["team", "all"] and disp_rows:
+    # [핵심 수정] 조장/관리자 제한(scope 검사) 삭제. 데이터가 있으면 무조건 수정 메뉴 표시!
+    if disp_rows:
         st.divider()
         st.subheader("🛠️ 계획 수정")
         with st.expander("수정 메뉴", expanded=True):
@@ -680,7 +681,7 @@ def ui_view_plan(scope, name, island, role=""):
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
                         st.success("삭제 완료"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
-
+                    
 def ui_approve(island, role):
     st.header("✅ 계획 승인")
     now = datetime.now(); nm = now.replace(day=28) + pd.Timedelta(days=4)
@@ -826,3 +827,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
