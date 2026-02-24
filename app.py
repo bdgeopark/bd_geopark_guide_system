@@ -32,25 +32,36 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-# 한국 표준시(KST) 반환 함수
+# 한국 표준시(KST) 반환
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
-# 30분 단위 시간 계산 (0~30분 -> 30분 / 31~59분 -> 다음 정시)
-def calc_working_hours(c_in, c_out):
-    if not c_in or not c_out: return ""
+# [추가] 30분 단위 시간 반올림 함수 (00분 유지, 01~30분 -> 30분, 31~59분 -> 다음 정시)
+def round_time_30min(t_str):
+    if not t_str: return ""
     try:
-        t_in = datetime.strptime(c_in.strip(), "%H:%M")
-        if 0 <= t_in.minute <= 30: t_in = t_in.replace(minute=30)
-        else: t_in = (t_in + timedelta(hours=1)).replace(minute=0)
+        t = datetime.strptime(t_str.strip(), "%H:%M")
+        if t.minute == 0:
+            return t.strftime("%H:%M")
+        elif 1 <= t.minute <= 30:
+            t = t.replace(minute=30)
+        else:
+            t = (t + timedelta(hours=1)).replace(minute=0)
+        return t.strftime("%H:%M")
+    except:
+        return t_str
 
-        t_out = datetime.strptime(c_out.strip(), "%H:%M")
-        if 0 <= t_out.minute <= 30: t_out = t_out.replace(minute=30)
-        else: t_out = (t_out + timedelta(hours=1)).replace(minute=0)
-
+# [추가] 반올림된 시간 기준으로 활동 시간(H) 산정
+def calc_working_hours(c_in, c_out):
+    r_in = round_time_30min(c_in)
+    r_out = round_time_30min(c_out)
+    if not r_in or not r_out: return ""
+    try:
+        t_in = datetime.strptime(r_in, "%H:%M")
+        t_out = datetime.strptime(r_out, "%H:%M")
         delta = t_out - t_in
         hours = delta.total_seconds() / 3600
-        if hours < 0: hours += 24 # 자정 넘기는 경우 방어
+        if hours < 0: hours += 24 # 야간/자정 넘김 방어
         return str(int(hours)) if hours.is_integer() else str(round(hours, 1))
     except:
         return ""
@@ -62,7 +73,7 @@ if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_no
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수 (칼럼 꼬임 방지를 위해 Dict 기반으로 재설계)
+# 2. 데이터 함수 (데이터 누락/오류 완전 차단을 위한 로직 개편)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -84,13 +95,15 @@ def load_data(sheet_name, year=None, month=None, island=None):
         try: sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
         except: return pd.DataFrame()
             
-        data = sh.get_all_records()
-        if not data: return pd.DataFrame()
+        # get_all_records() 대신 get_all_values()를 사용하여 데이터 꼬임 방지
+        vals = sh.get_all_values()
+        if not vals or len(vals) < 2: return pd.DataFrame()
         
-        df = pd.DataFrame(data)
+        df = pd.DataFrame(vals[1:], columns=vals[0])
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
+        # 필수 칼럼 강제 주입
         for c in ["날짜", "이름", "장소", "섬"]:
             if c not in df.columns: df[c] = ""
 
@@ -124,7 +137,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
         return pd.DataFrame()
 
 def save_data(sheet_name, row_dicts):
-    """딕셔너리 기반으로 칼럼을 맞춰서 저장 (데이터 꼬임 완전 방지)"""
+    """딕셔너리 리스트 기반 저장으로 안정성 100% 확보"""
     try:
         doc = client.open(SPREADSHEET_NAME)
         try: sh = doc.worksheet(sheet_name)
@@ -132,8 +145,15 @@ def save_data(sheet_name, row_dicts):
             sh = doc.add_worksheet(sheet_name, 1000, len(row_dicts[0]))
             sh.append_row(list(row_dicts[0].keys()))
             
-        existing = sh.get_all_records()
-        df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=list(row_dicts[0].keys()))
+        vals = sh.get_all_values()
+        if not vals:
+            headers = list(row_dicts[0].keys())
+            sh.append_row(headers)
+            df = pd.DataFrame(columns=headers)
+        else:
+            headers = vals[0]
+            df = pd.DataFrame(vals[1:], columns=headers)
+            
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
@@ -151,6 +171,9 @@ def save_data(sheet_name, row_dicts):
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
+        for col in list(row_dicts[0].keys()):
+            if col not in final_df.columns: final_df[col] = ""
+            
         combined = pd.concat([final_df, new_df], ignore_index=True).fillna("")
         
         if '날짜' in combined.columns:
@@ -167,7 +190,7 @@ def save_data(sheet_name, row_dicts):
         return False
 
 def append_data(sheet_name, row_dict):
-    """딕셔너리 기반으로 칼럼을 맞춰서 추가 (운영일지 누적용)"""
+    """딕셔너리 기반 누적 추가"""
     try:
         doc = client.open(SPREADSHEET_NAME)
         try: sh = doc.worksheet(sheet_name)
@@ -175,9 +198,17 @@ def append_data(sheet_name, row_dict):
             sh = doc.add_worksheet(sheet_name, 1000, len(row_dict))
             sh.append_row(list(row_dict.keys()))
         
-        existing = sh.get_all_records()
-        df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=list(row_dict.keys()))
+        vals = sh.get_all_values()
+        if not vals:
+            headers = list(row_dict.keys())
+            sh.append_row(headers)
+            df = pd.DataFrame(columns=headers)
+        else:
+            headers = vals[0]
+            df = pd.DataFrame(vals[1:], columns=headers)
+            
         df.columns = [str(c).strip() for c in df.columns]
+        if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
         new_df = pd.DataFrame([row_dict])
         combined = pd.concat([df, new_df], ignore_index=True).fillna("")
@@ -263,8 +294,12 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 c_in = str(g.get('출근시간', ''))
                 c_out = str(g.get('퇴근시간', ''))
                 
-                t_display = f"{c_in} ~ {c_out}" if c_in and c_out else (c_in if c_in else "")
-                h_total = calc_working_hours(c_in, c_out) # 30분 단위 반올림 계산 적용
+                # [적용] PDF 표기 시 30분 단위로 반올림된 시간 적용!
+                r_in = round_time_30min(c_in)
+                r_out = round_time_30min(c_out)
+                
+                t_display = f"{r_in} ~ {r_out}" if r_in and r_out else (r_in if r_in else "")
+                h_total = calc_working_hours(c_in, c_out) 
                 
                 pdf.cell(50, 8, g_name, 1, 0, 'C')
                 pdf.cell(100, 8, t_display, 1, 0, 'C')
@@ -409,7 +444,7 @@ def get_display_data(df_plan, df_act, date_list):
                             c_in = str(log.get('출근시간', '')).strip()
                             c_out = str(log.get('퇴근시간', '')).strip()
                             
-                            # 30분 단위 환산 시간 적용
+                            # [적용] 계획 조회 화면에도 30분 단위 반올림 계산된 시간 적용
                             if c_in and c_out: 
                                 h = calc_working_hours(c_in, c_out)
                                 t_val = f"{h}H" if h else "완료"
@@ -551,6 +586,7 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
+            # [적용] 지저분한 00:00:00 시간을 날려버리기 위해 명시적 문자열 변환
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             
             if role in ["조장", "관리자"]:
@@ -867,7 +903,7 @@ def ui_approve(island, role):
                 sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
                 cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                 sh.clear()
-                # DataFrame으로 변환해서 칼럼 맞춤 보장
+                
                 final_save_df = pd.DataFrame(save_rows)
                 for c in cols:
                     if c not in final_save_df.columns: final_save_df[c] = ""
@@ -897,7 +933,6 @@ def ui_stats():
         
         total_v = 0; total_l = 0; total_c = 0
         
-        # 신규 기준 로직 (청취자가 >0 일때만 카운트)
         if not df_op.empty:
             df_op['탐방객수'] = pd.to_numeric(df_op['탐방객수'], errors='coerce').fillna(0)
             df_op['청취자수'] = pd.to_numeric(df_op['청취자수'], errors='coerce').fillna(0)
