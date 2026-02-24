@@ -36,7 +36,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수 (캐싱 적용으로 속도 향상 및 오류 방지)
+# 2. 데이터 함수
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -132,7 +132,7 @@ def save_data(sheet_name, new_rows, header_list):
             
         sh.clear()
         sh.update([combined.columns.values.tolist()] + combined.values.tolist())
-        st.cache_data.clear() # 캐시 초기화
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"저장 오류: {e}")
@@ -219,7 +219,7 @@ def save_daily_report(act_row, op_row):
         sh_op.clear()
         sh_op.update([df_op.columns.values.tolist()] + df_op.values.tolist())
         
-        st.cache_data.clear() # 캐시 초기화
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"일지 저장 중 오류 발생: {e}")
@@ -235,6 +235,138 @@ def get_users(island):
 # =========================================================
 # 3. PDF 및 데이터 가공 로직
 # =========================================================
+
+# [수정] 조장 및 관리자가 다운받는 '서식 3 지질공원 안내소 운영일지' 생성 함수
+def generate_official_journal_pdf(df_merged):
+    """
+    제공된 '25_8_1_용틀임.pdf' 서식을 기반으로 1일 1장 분량의 운영일지를 생성합니다.
+    """
+    font_path = "NanumGothic.ttf"
+    if not os.path.exists(font_path): return None
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_margins(15, 15, 15)
+    pdf.set_auto_page_break(True, margin=15)
+    pdf.add_font("Nanum", "", font_path)
+    pdf.add_font("Nanum", "B", font_path)
+
+    # 날짜와 장소별로 그룹화 (안내소마다 하루에 1장씩 출력)
+    df_merged['d_str'] = pd.to_datetime(df_merged['날짜']).dt.strftime('%Y-%m-%d')
+    grouped = df_merged.groupby(['d_str', '장소'])
+
+    for (date_str, place), group in grouped:
+        pdf.add_page()
+        
+        d_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        w_day = DAY_MAP[d_obj.weekday()]
+
+        # 1. 타이틀
+        pdf.set_font("Nanum", "B", 18)
+        pdf.cell(180, 10, "【서식 3】 지질공원 안내소 운영일지", 0, 1, 'C')
+        pdf.ln(5)
+
+        # 2. 날짜 표시
+        pdf.set_font("Nanum", "B", 11)
+        pdf.cell(180, 8, f"({d_obj.year}년 {d_obj.month}월 {d_obj.day}일) {w_day}요일", 0, 1, 'R')
+
+        # 3. 상단 헤더 테이블 (안내소, 지시사항, 해설사 정보)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font("Nanum", "B", 10)
+        
+        # 첫 번째 행
+        pdf.cell(30, 8, "안내소", 1, 0, 'C', True)
+        pdf.set_font("Nanum", "", 10)
+        pdf.cell(40, 8, str(place), 1, 0, 'C')
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 8, "지시사항", 1, 0, 'C', True)
+        pdf.cell(80, 8, "", 1, 1, 'C')
+
+        # 두 번째 행
+        pdf.cell(30, 8, "해설사", 1, 0, 'C', True)
+        pdf.cell(40, 8, "성명", 1, 0, 'C', True)
+        pdf.cell(80, 8, "활동 시간", 1, 0, 'C', True)
+        pdf.cell(30, 8, "합계 시간", 1, 1, 'C', True)
+
+        # 해설사 정보 행 (최대 2명까지 표시, 그 이상은 병합 처리)
+        pdf.set_font("Nanum", "", 10)
+        guides = group.to_dict('records')
+        for i in range(2):
+            # 첫 번째 칸은 빈칸 (해설사 아래)
+            pdf.cell(30, 8, "", 1, 0, 'C')
+            if i < len(guides):
+                g = guides[i]
+                g_name = str(g.get('이름', ''))
+                g_time = str(g.get('활동시간', ''))
+                t_display = "08:00~17:00" if g_time == "8" else ("08:00~12:00" if g_time == "4" else "")
+                
+                pdf.cell(40, 8, g_name, 1, 0, 'C')
+                pdf.cell(80, 8, t_display, 1, 0, 'C')
+                pdf.cell(30, 8, g_time, 1, 1, 'C')
+            else:
+                pdf.cell(40, 8, "", 1, 0, 'C')
+                pdf.cell(80, 8, "", 1, 0, 'C')
+                pdf.cell(30, 8, "", 1, 1, 'C')
+                
+        pdf.ln(5)
+
+        # 4. 메인 데이터 테이블 (시간별)
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 10, "시간", 1, 0, 'C', True)
+        pdf.cell(35, 10, "지질명소 탐방객(명)", 1, 0, 'C', True)
+        pdf.cell(35, 10, "해설 청취자(명)", 1, 0, 'C', True)
+        pdf.cell(30, 10, "해설 횟수(회)", 1, 0, 'C', True)
+        pdf.cell(50, 10, "비고(환경정비, 시설점검 등)", 1, 1, 'C', True)
+
+        pdf.set_font("Nanum", "", 9)
+        time_slots = [
+            "08:00~09:00", "09:00~10:00", "10:00~11:00", "11:00~12:00",
+            "12:00~13:00", "13:00~14:00", "14:00~15:00", "15:00~16:00", 
+            "16:00~17:00", "17:00~18:00"
+        ]
+        
+        # 시스템상 시간별 데이터가 없으므로 공란으로 출력
+        for t in time_slots:
+            pdf.cell(30, 8, t, 1, 0, 'C')
+            pdf.cell(35, 8, "", 1, 0, 'C')
+            pdf.cell(35, 8, "", 1, 0, 'C')
+            pdf.cell(30, 8, "", 1, 0, 'C')
+            pdf.cell(50, 8, "", 1, 1, 'C')
+
+        # 합계 계산
+        t_vis = str(group['탐방객수'].iloc[0]) if not group['탐방객수'].isna().all() and str(group['탐방객수'].iloc[0]) != "" else "0"
+        l_sum = int(pd.to_numeric(group['청취자수'], errors='coerce').fillna(0).sum())
+        c_sum = int(pd.to_numeric(group['해설횟수'], errors='coerce').fillna(0).sum())
+
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 10, "합계", 1, 0, 'C', True)
+        pdf.cell(35, 10, t_vis, 1, 0, 'C')
+        pdf.cell(35, 10, str(l_sum), 1, 0, 'C')
+        pdf.cell(30, 10, str(c_sum), 1, 0, 'C')
+        pdf.cell(50, 10, "", 1, 1, 'C')
+
+        # 5. 특이사항 및 서명란
+        pdf.ln(5)
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 15, "특이사항", 1, 0, 'C', True)
+        
+        pdf.set_font("Nanum", "", 9)
+        # 특이사항 텍스트 결합 (운영일지 특이사항 + 개인 활동내용)
+        note_base = str(group['특이사항'].iloc[0])
+        acts = [str(x).strip() for x in group['활동내용'].dropna().unique() if str(x).strip()]
+        if acts:
+            note_base += " / [활동] " + ", ".join(acts)
+            
+        # 너무 길면 자르기 (1줄 제한)
+        if len(note_base) > 65: note_base = note_base[:63] + "..."
+        pdf.cell(150, 15, note_base, 1, 1, 'L')
+        
+        pdf.ln(10)
+        pdf.set_font("Nanum", "", 12)
+        pdf.cell(90, 10, "조장 확인 :                         (인/서명)", 0, 0, 'C')
+        pdf.cell(90, 10, "면 담당 확인 :                         (인/서명)", 0, 1, 'C')
+
+    return bytes(pdf.output())
+
 def get_display_data(df_plan, df_log, date_list):
     disp_rows = []
     if df_log.empty and '날짜' not in df_log.columns: df_log['날짜'] = []
@@ -287,16 +419,15 @@ def get_display_data(df_plan, df_log, date_list):
     return disp_rows
 
 def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows, current_island):
-    """안내소 운영계획서 PDF 생성"""
     font_path = "NanumGothic.ttf"
-    if not os.path.exists(font_path): st.error("폰트 없음"); return None
+    if not os.path.exists(font_path): return None
 
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_margins(15, 15, 15); pdf.set_auto_page_break(True, margin=10); pdf.add_page()
     pdf.add_font("Nanum", "", font_path); pdf.add_font("Nanum", "B", font_path)
 
     pdf.set_font("Nanum", "B", 22); pdf.set_line_width(0.4)
-    pdf.cell(180, 15, "지질공원 안내소 운영계획서", 1, 1, 'C'); pdf.ln(3)
+    pdf.cell(180, 15, "지질공원 안내소 운영계획표", 1, 1, 'C'); pdf.ln(3)
 
     sy = pdf.get_y(); sx = pdf.get_x()
     pdf.set_line_width(0.12); lh = 7; pdf.set_fill_color(245, 245, 245)
@@ -360,66 +491,6 @@ def generate_pdf(target_place, special_note, p_year, p_month, p_range, disp_rows
     pdf.ln(5); pdf.set_font("Nanum", "", 12)
     pdf.cell(90, 10, "조장 :                         (인/서명)", 0, 0, 'C')
     pdf.cell(90, 10, "면 담당 :                         (인/서명)", 0, 1, 'C')
-    return bytes(pdf.output())
-
-# [추가] 활동조회(운영일지) 전용 PDF 생성 함수
-def generate_journal_pdf(df, p_year, p_month, p_island):
-    font_path = "NanumGothic.ttf"
-    if not os.path.exists(font_path): return None
-
-    pdf = FPDF(orientation='P', unit='mm', format='A4')
-    pdf.set_margins(15, 15, 15)
-    pdf.set_auto_page_break(True, margin=15)
-    pdf.add_page()
-    pdf.add_font("Nanum", "", font_path)
-    pdf.add_font("Nanum", "B", font_path)
-
-    # 타이틀
-    pdf.set_font("Nanum", "B", 18)
-    title_str = f"{p_year}년 {p_month}월 활동 및 운영일지"
-    if p_island: title_str = f"[{p_island}] " + title_str
-    pdf.cell(180, 12, title_str, 0, 1, 'C')
-    pdf.ln(3)
-
-    # 헤더
-    pdf.set_font("Nanum", "B", 9)
-    pdf.set_fill_color(235, 235, 235)
-    cols = [("날짜", 22), ("장소", 32), ("성명", 18), ("시간", 12), ("탐방", 12), ("청취", 12), ("내용 및 특이사항", 72)]
-    for c, w in cols:
-        pdf.cell(w, 8, c, 1, 0, 'C', True)
-    pdf.ln()
-
-    # 데이터
-    pdf.set_font("Nanum", "", 8)
-    if df.empty:
-        pdf.cell(180, 10, "조건에 맞는 데이터가 없습니다.", 1, 1, 'C')
-    else:
-        for _, r in df.iterrows():
-            d_str = str(r.get('날짜', ''))[:10]
-            place = str(r.get('장소', ''))[:12] # 글자수 제한 (표 깨짐 방지)
-            name = str(r.get('이름', ''))[:6]
-            time_val = str(r.get('활동시간', ''))
-            vis = str(r.get('탐방객수', ''))
-            lis = str(r.get('청취자수', ''))
-            
-            act = str(r.get('활동내용', ''))
-            note = str(r.get('특이사항', ''))
-            combined_note = ""
-            if act: combined_note += f"[{act}] "
-            if note: combined_note += note
-            
-            # 긴 텍스트 자르기 (가독성 유지)
-            if len(combined_note) > 35:
-                combined_note = combined_note[:33] + "..."
-            
-            pdf.cell(22, 8, d_str, 1, 0, 'C')
-            pdf.cell(32, 8, place, 1, 0, 'C')
-            pdf.cell(18, 8, name, 1, 0, 'C')
-            pdf.cell(12, 8, time_val, 1, 0, 'C')
-            pdf.cell(12, 8, vis, 1, 0, 'C')
-            pdf.cell(12, 8, lis, 1, 0, 'C')
-            pdf.cell(72, 8, combined_note, 1, 1, 'L')
-
     return bytes(pdf.output())
 
 # =========================================================
@@ -532,11 +603,19 @@ def ui_journal_write(name, island):
 
 def ui_view_journal(scope, name, island):
     st.header("🔍 활동 조회")
-    c1, c2 = st.columns(2)
+    
+    # 상단 검색 필터
+    c1, c2, c3 = st.columns(3)
     with c1: vy = st.number_input("연도", value=datetime.now().year, key="vj_y")
     with c2: vm = st.number_input("월", value=datetime.now().month, key="vj_m")
     
     t_isl = island if scope != "all" else None
+    
+    if scope == "all" or scope == "team":
+        place_options = ["전체"] + [p for locs in LOCATIONS.values() for p in locs] if scope == "all" else ["전체"] + LOCATIONS.get(island, [])
+        with c3: sel_place = st.selectbox("안내소 선택", place_options, key="vj_p")
+    else:
+        sel_place = "전체"
     
     df_act = load_data("활동일지", vy, vm, t_isl)
     df_op = load_data("운영일지", vy, vm, t_isl)
@@ -564,6 +643,9 @@ def ui_view_journal(scope, name, island):
     if scope == "me" and '이름' in df_merged.columns:
         df_merged = df_merged[df_merged['이름'] == name]
         
+    if sel_place != "전체" and '장소' in df_merged.columns:
+        df_merged = df_merged[df_merged['장소'] == sel_place]
+        
     if df_merged.empty:
         st.info("조건에 맞는 활동 데이터가 없습니다.")
         return
@@ -575,16 +657,20 @@ def ui_view_journal(scope, name, island):
         "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
     })
     
-    # [새로 추가된 기능] 활동 및 운영일지 다운로드 (CSV & PDF)
+    # [새로운 서식 PDF 다운로드 기능]
     st.divider()
     c_dl1, c_dl2 = st.columns(2)
     with c_dl1:
         csv_data = df_merged[display_cols].to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📊 엑셀(CSV) 다운로드", csv_data, f"운영일지_{vy}년{vm}월.csv", "text/csv", use_container_width=True)
+        st.download_button("📊 엑셀(CSV) 다운로드", csv_data, f"활동내역_{vy}년{vm}월.csv", "text/csv", use_container_width=True)
+        
     with c_dl2:
-        journal_pdf = generate_journal_pdf(df_merged, vy, vm, t_isl)
-        if journal_pdf:
-            st.download_button("📥 PDF 다운로드", journal_pdf, f"운영일지_{vy}년{vm}월.pdf", "application/pdf", use_container_width=True)
+        if sel_place == "전체":
+            st.warning("⚠️ 서식 3 운영일지 PDF를 다운로드하려면 먼저 위에서 '특정 안내소'를 선택해주세요.")
+        else:
+            journal_pdf = generate_official_journal_pdf(df_merged)
+            if journal_pdf:
+                st.download_button("📥 【서식 3】 운영일지 PDF 다운로드", journal_pdf, f"운영일지_{sel_place}_{vy}년{vm}월.pdf", "application/pdf", use_container_width=True, key="journal_pdf_dl")
 
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
@@ -760,7 +846,7 @@ def ui_view_plan(scope, name, island, role=""):
                         ald.loc[mask, '상태'] = '취소대기'
                         rem = ald.drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
-                        st.cache_data.clear() # 캐시 초기화
+                        st.cache_data.clear()
                         st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
                         
                 except Exception as e: st.error(f"오류: {e}")
@@ -826,7 +912,7 @@ def ui_approve(island, role):
                     cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                     sh.clear()
                     sh.update([cols] + save_rows)
-                    st.cache_data.clear() # 캐시 초기화
+                    st.cache_data.clear()
                     st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                     time.sleep(1.5); st.rerun()
             except Exception as e:
@@ -835,7 +921,7 @@ def ui_approve(island, role):
     with c_btn2:
         pdf_data = generate_pdf(tpl, note, py, pm, pr, disp_rows, tis)
         if pdf_data:
-            st.download_button("📥 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf")
+            st.download_button("📥 운영계획서 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf", key="pdf_dl_btn")
 
 def ui_stats():
     st.header("📊 통계")
