@@ -36,7 +36,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수
+# 2. 데이터 함수 (캐싱 적용됨)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -52,6 +52,8 @@ def get_client():
 
 client = get_client()
 
+# [핵심 수정] 데이터를 60초간 임시 저장하여 구글 API 제한 방지 및 속도 향상
+@st.cache_data(ttl=60, show_spinner=False)
 def load_data(sheet_name, year=None, month=None, island=None):
     try:
         try: sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
@@ -131,17 +133,18 @@ def save_data(sheet_name, new_rows, header_list):
             
         sh.clear()
         sh.update([combined.columns.values.tolist()] + combined.values.tolist())
+        
+        # [핵심 수정] 저장 후 캐시 비우기 (최신 데이터 반영)
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"저장 오류: {e}")
         return False
 
 def save_daily_report(act_row, op_row):
-    """활동일지와 운영일지 분리 저장 (탐방객은 작은 수 적용)"""
     try:
         doc = client.open(SPREADSHEET_NAME)
         
-        # 1. 활동일지 저장 (개인 기록)
         act_cols = ["날짜", "섬", "장소", "이름", "활동시간", "활동내용", "청취자수", "해설횟수", "타임스탬프", "년", "월"]
         try: sh_act = doc.worksheet("활동일지")
         except: 
@@ -170,7 +173,6 @@ def save_daily_report(act_row, op_row):
         sh_act.clear()
         sh_act.update([df_act.columns.values.tolist()] + df_act.values.tolist())
         
-        # 2. 운영일지 저장 (장소 기록)
         op_cols = ["날짜", "섬", "장소", "탐방객수", "특이사항", "타임스탬프", "년", "월"]
         try: sh_op = doc.worksheet("운영일지")
         except: 
@@ -218,6 +220,8 @@ def save_daily_report(act_row, op_row):
         sh_op.clear()
         sh_op.update([df_op.columns.values.tolist()] + df_op.values.tolist())
         
+        # [핵심 수정] 저장 후 캐시 비우기
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"일지 저장 중 오류 발생: {e}")
@@ -475,11 +479,9 @@ def ui_view_journal(scope, name, island):
     
     t_isl = island if scope != "all" else None
     
-    # [수정] 조장이 개인/장소 모든 정보를 볼 수 있도록 활동일지+운영일지 병합 표시
     df_act = load_data("활동일지", vy, vm, t_isl)
     df_op = load_data("운영일지", vy, vm, t_isl)
     
-    # 레거시 데이터 호환성 (과거 합쳐진 데이터)
     if df_act.empty and not df_op.empty and '이름' in df_op.columns:
         df_merged = df_op
     else:
@@ -605,12 +607,6 @@ def ui_view_plan(scope, name, island, role=""):
     df_plan = load_data("활동계획", py, pm, t_isl)
     df_act = load_data("활동일지", py, pm, t_isl)
     
-    # [호환성 처리] 과거 데이터용 Fallback
-    if df_act.empty:
-        df_old_op = load_data("운영일지", py, pm, t_isl)
-        if not df_old_op.empty and '이름' in df_old_op.columns:
-            df_act = df_old_op
-    
     if df_plan.empty: st.info("데이터 없음"); return
     
     if sel_place:
@@ -694,6 +690,8 @@ def ui_view_plan(scope, name, island, role=""):
                         ald.loc[mask, '상태'] = '취소대기'
                         rem = ald.drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
+                        
+                        st.cache_data.clear() # 캐시 초기화
                         st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
                         
                 except Exception as e: st.error(f"오류: {e}")
@@ -718,14 +716,9 @@ def ui_approve(island, role):
     
     df = load_data("활동계획", py, pm, tis)
     if not df.empty: df = df[df['장소'] == tpl]
+    j_df = load_data("활동일지", py, pm, tis)
     
-    df_act = load_data("활동일지", py, pm, tis)
-    if df_act.empty:
-        df_old_op = load_data("운영일지", py, pm, tis)
-        if not df_old_op.empty and '이름' in df_old_op.columns:
-            df_act = df_old_op
-            
-    disp_rows = get_display_data(df, df_act, dates)
+    disp_rows = get_display_data(df, j_df, dates)
     df_disp = pd.DataFrame(disp_rows)
     cols = ["날짜", "요일", "plan_0", "plan_1", "plan_2", "plan_3", "res_0", "res_1", "res_2", "res_3"]
     for c in cols:
@@ -743,11 +736,9 @@ def ui_approve(island, role):
                 else:
                     raw_df['d_temp'] = raw_df['날짜'].dt.strftime("%Y-%m-%d")
                     
-                    # 1. 취소대기 삭제
                     cancel_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str)) & (raw_df['상태'] == '취소대기')
                     raw_df = raw_df[~cancel_mask]
                     
-                    # 2. 남은 행들 승인완료 처리
                     raw_df['d_temp'] = raw_df['날짜'].dt.strftime("%Y-%m-%d")
                     approve_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str))
                     raw_df.loc[approve_mask, '상태'] = "승인완료"
@@ -766,6 +757,8 @@ def ui_approve(island, role):
                     cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                     sh.clear()
                     sh.update([cols] + save_rows)
+                    
+                    st.cache_data.clear() # 캐시 초기화
                     st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                     time.sleep(1.5); st.rerun()
             except Exception as e:
@@ -774,7 +767,8 @@ def ui_approve(island, role):
     with c_btn2:
         pdf_data = generate_pdf(tpl, note, py, pm, pr, disp_rows, tis)
         if pdf_data:
-            st.download_button("📥 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf")
+            # 다운로드 버튼 클릭 시 새로고침 오류 방지를 위해 key 추가
+            st.download_button("📥 PDF 다운로드", pdf_data, f"운영계획서_{tpl}_{pm}월.pdf", "application/pdf", key="pdf_dl_btn")
 
 def ui_stats():
     st.header("📊 통계")
@@ -791,7 +785,7 @@ def ui_stats():
             total_v = int(df_op['탐방객수'].sum())
             
         df_act = load_data("활동일지", sy, sm, None)
-        # 옛날 데이터 호환성
+        
         if df_act.empty and not df_op.empty and '이름' in df_op.columns:
             df_act = df_op.copy()
             
