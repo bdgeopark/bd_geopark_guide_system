@@ -32,19 +32,17 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-# 한국 표준시(KST) 반환 함수
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
-# 월 상태유지
 if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_now().year
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수 (결측 컬럼 및 레거시 데이터 보호 강화)
+# 2. 데이터 함수 
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -73,7 +71,6 @@ def load_data(sheet_name, year=None, month=None, island=None):
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 시트별 필수 컬럼 보정
         if sheet_name == "활동계획":
             for c in ['대타여부', '기존해설사', '상태']:
                 if c not in df.columns: df[c] = ""
@@ -486,11 +483,16 @@ def ui_view_journal(scope, name, island, role=""):
                 st.info("해당 장소 기록 없음")
             else:
                 with st.form("edit_act_form"):
-                    edited_act = st.data_editor(filter_act[edit_cols], hide_index=True, use_container_width=True)
+                    # 화면 표시용으로 날짜를 문자열로 변환 (00:00:00 숨김)
+                    disp_df = filter_act[edit_cols].copy()
+                    disp_df['날짜'] = pd.to_datetime(disp_df['날짜']).dt.strftime('%Y-%m-%d')
+                    
+                    edited_act = st.data_editor(disp_df, hide_index=True, use_container_width=True)
                     if st.form_submit_button("변경사항 저장"):
+                        df_act_dates = pd.to_datetime(df_act['날짜']).dt.strftime("%Y-%m-%d")
                         for _, r in edited_act.iterrows():
-                            d_str = r['날짜'].strftime("%Y-%m-%d") if isinstance(r['날짜'], pd.Timestamp) else str(r['날짜'])
-                            idx = df_act[(df_act['날짜'] == pd.to_datetime(d_str)) & (df_act['이름'] == r['이름']) & (df_act['장소'] == r['장소'])].index
+                            d_str = r['날짜']
+                            idx = df_act[(df_act_dates == d_str) & (df_act['이름'] == r['이름']) & (df_act['장소'] == r['장소'])].index
                             if not idx.empty:
                                 df_act.loc[idx, '출근시간'] = r['출근시간']
                                 df_act.loc[idx, '퇴근시간'] = r['퇴근시간']
@@ -522,22 +524,36 @@ def ui_view_journal(scope, name, island, role=""):
                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
             })
 
-    if sel_place != "전체" and not df_act.empty:
-        st.divider()
-        st.subheader("📥 일지 다운로드")
-        avail_dates = sorted(df_act[df_act['장소'] == sel_place]['날짜'].dt.strftime('%Y-%m-%d').unique())
+    # [핵심 수정] 다운로드 버튼 로직 개선 (경고 문구 명확화)
+    st.divider()
+    st.subheader("📥 일지 다운로드")
+    
+    if sel_place == "전체":
+        st.warning("⚠️ 서식 3 운영일지 PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
+    elif df_act.empty and df_op.empty:
+        st.info("다운로드할 데이터가 없습니다.")
+    else:
+        avail_dates = []
+        if not df_act.empty:
+            avail_dates.extend(df_act[df_act['장소'] == sel_place]['날짜'].dt.strftime('%Y-%m-%d').unique().tolist())
+        if not df_op.empty:
+            avail_dates.extend(df_op[df_op['장소'] == sel_place]['날짜'].dt.strftime('%Y-%m-%d').unique().tolist())
+        
+        avail_dates = sorted(list(set(avail_dates)))
+        
         if avail_dates:
             c_d1, c_d2 = st.columns([1, 2])
             with c_d1: target_d = st.selectbox("출력할 날짜 선택", avail_dates)
             with c_d2:
                 st.write(""); st.write("")
-                day_act = df_act[(df_act['날짜'] == pd.to_datetime(target_d)) & (df_act['장소'] == sel_place)]
-                day_op = df_op[(df_op['날짜'] == pd.to_datetime(target_d)) & (df_op['장소'] == sel_place)] if not df_op.empty else pd.DataFrame()
+                day_act = df_act[(pd.to_datetime(df_act['날짜']).dt.strftime('%Y-%m-%d') == target_d) & (df_act['장소'] == sel_place)] if not df_act.empty else pd.DataFrame()
+                day_op = df_op[(pd.to_datetime(df_op['날짜']).dt.strftime('%Y-%m-%d') == target_d) & (df_op['장소'] == sel_place)] if not df_op.empty else pd.DataFrame()
                 
                 pdf_data = generate_official_journal_pdf(day_act, day_op, target_d, sel_place)
                 if pdf_data:
                     st.download_button(f"📄 {target_d} 운영일지 PDF 다운로드", pdf_data, f"운영일지_{sel_place}_{target_d}.pdf", "application/pdf", use_container_width=True)
-
+        else:
+            st.info("해당 안내소의 일지 데이터가 없습니다.")
 
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
