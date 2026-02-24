@@ -175,7 +175,11 @@ def get_users(island):
 # =========================================================
 # 3. PDF 및 데이터 가공 로직
 # =========================================================
-def generate_official_journal_pdf(df_act, df_op, target_date, target_place):
+
+def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_place):
+    """
+    월간 단위로 전체 날짜를 한 번에 PDF로 출력합니다 (하루당 1장).
+    """
     font_path = "NanumGothic.ttf"
     if not os.path.exists(font_path): return None
 
@@ -185,133 +189,151 @@ def generate_official_journal_pdf(df_act, df_op, target_date, target_place):
     pdf.add_font("Nanum", "", font_path)
     pdf.add_font("Nanum", "B", font_path)
 
-    pdf.add_page()
+    # 활동일지와 운영일지에 있는 모든 날짜를 추출하여 정렬
+    dates_act = set(pd.to_datetime(df_act['날짜']).dt.strftime('%Y-%m-%d').unique()) if not df_act.empty else set()
+    dates_op = set(pd.to_datetime(df_op['날짜']).dt.strftime('%Y-%m-%d').unique()) if not df_op.empty else set()
+    all_dates = sorted(list(dates_act | dates_op))
     
-    d_obj = datetime.strptime(target_date, "%Y-%m-%d")
-    w_day = DAY_MAP[d_obj.weekday()]
+    if not all_dates: return None
 
-    pdf.set_font("Nanum", "B", 18)
-    pdf.cell(180, 10, "【서식 3】 지질공원 안내소 운영일지", 0, 1, 'C')
-    pdf.ln(5)
-
-    pdf.set_font("Nanum", "B", 11)
-    pdf.cell(180, 8, f"({d_obj.year}년 {d_obj.month}월 {d_obj.day}일) {w_day}요일", 0, 1, 'R')
-
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("Nanum", "B", 10)
-    
-    pdf.cell(30, 8, "안내소", 1, 0, 'C', True)
-    pdf.set_font("Nanum", "", 10)
-    pdf.cell(40, 8, str(target_place), 1, 0, 'C')
-    pdf.set_font("Nanum", "B", 10)
-    pdf.cell(30, 8, "지시사항", 1, 0, 'C', True)
-    pdf.cell(80, 8, "", 1, 1, 'C')
-
-    pdf.cell(50, 8, "해설사 성명", 1, 0, 'C', True)
-    pdf.cell(100, 8, "활동 시간 (출퇴근)", 1, 0, 'C', True)
-    pdf.cell(30, 8, "합계 시간", 1, 1, 'C', True)
-
-    pdf.set_font("Nanum", "", 10)
-    
-    guides = df_act.to_dict('records') if not df_act.empty else []
-    for i in range(2):
-        if i < len(guides):
-            g = guides[i]
-            g_name = str(g.get('이름', ''))
-            c_in = str(g.get('출근시간', ''))
-            c_out = str(g.get('퇴근시간', ''))
-            
-            t_display = f"{c_in} ~ {c_out}" if c_in and c_out else (c_in if c_in else "")
-            h_total = ""
-            if c_in and c_out:
-                try:
-                    tdelta = datetime.strptime(c_out, "%H:%M") - datetime.strptime(c_in, "%H:%M")
-                    h_total = str(tdelta.seconds // 3600)
-                except: pass
-            
-            pdf.cell(50, 8, g_name, 1, 0, 'C')
-            pdf.cell(100, 8, t_display, 1, 0, 'C')
-            pdf.cell(30, 8, h_total, 1, 1, 'C')
-        else:
-            pdf.cell(50, 8, "", 1, 0, 'C')
-            pdf.cell(100, 8, "", 1, 0, 'C')
-            pdf.cell(30, 8, "", 1, 1, 'C')
-            
-    pdf.ln(5)
-
-    pdf.set_font("Nanum", "B", 10)
-    pdf.cell(30, 10, "시간", 1, 0, 'C', True)
-    pdf.cell(35, 10, "지질명소 탐방객(명)", 1, 0, 'C', True)
-    pdf.cell(35, 10, "해설 청취자(명)", 1, 0, 'C', True)
-    pdf.cell(30, 10, "해설 횟수(회)", 1, 0, 'C', True)
-    pdf.cell(50, 10, "비고(내용 및 특이사항)", 1, 1, 'C', True)
-
-    pdf.set_font("Nanum", "", 9)
-    time_slots = [
-        "08:00~09:00", "09:00~10:00", "10:00~11:00", "11:00~12:00",
-        "12:00~13:00", "13:00~14:00", "14:00~15:00", "15:00~16:00", 
-        "16:00~17:00", "17:00~18:00"
-    ]
-    
-    slot_data = {t: {'vis': 0, 'lis': 0, 'cnt': 0, 'note': []} for t in time_slots}
-    
-    if not df_op.empty:
-        for _, r in df_op.iterrows():
-            in_time = str(r.get('입력시간', ''))
-            try: h = int(in_time.split(':')[0])
-            except: h = 8
-            
-            if h < 8: slot_k = "08:00~09:00"
-            elif h >= 17: slot_k = "17:00~18:00"
-            else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
-            
-            slot_data[slot_k]['vis'] += int(pd.to_numeric(r.get('탐방객수', 0), errors='coerce') or 0)
-            slot_data[slot_k]['lis'] += int(pd.to_numeric(r.get('청취자수', 0), errors='coerce') or 0)
-            slot_data[slot_k]['cnt'] += 1 
-            
-            if r.get('특이사항'):
-                slot_data[slot_k]['note'].append(str(r.get('특이사항')))
-    
-    t_vis = 0; t_lis = 0; t_cnt = 0
-    for t in time_slots:
-        d = slot_data[t]
-        v_str = str(d['vis']) if d['vis'] > 0 else ""
-        l_str = str(d['lis']) if d['lis'] > 0 else ""
-        c_str = str(d['cnt']) if d['cnt'] > 0 else ""
-        n_str = ", ".join(d['note'])
-        if len(n_str) > 25: n_str = n_str[:23] + ".."
+    # 각 날짜별로 1장씩 페이지 추가
+    for target_date in all_dates:
+        pdf.add_page()
         
-        t_vis += d['vis']; t_lis += d['lis']; t_cnt += d['cnt']
+        d_obj = datetime.strptime(target_date, "%Y-%m-%d")
+        w_day = DAY_MAP[d_obj.weekday()]
+
+        pdf.set_font("Nanum", "B", 18)
+        pdf.cell(180, 10, "【서식 3】 지질공원 안내소 운영일지", 0, 1, 'C')
+        pdf.ln(5)
+
+        pdf.set_font("Nanum", "B", 11)
+        pdf.cell(180, 8, f"({d_obj.year}년 {d_obj.month}월 {d_obj.day}일) {w_day}요일", 0, 1, 'R')
+
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font("Nanum", "B", 10)
         
-        pdf.cell(30, 8, t, 1, 0, 'C')
-        pdf.cell(35, 8, v_str, 1, 0, 'C')
-        pdf.cell(35, 8, l_str, 1, 0, 'C')
-        pdf.cell(30, 8, c_str, 1, 0, 'C')
-        pdf.cell(50, 8, n_str, 1, 1, 'L')
+        pdf.cell(30, 8, "안내소", 1, 0, 'C', True)
+        pdf.set_font("Nanum", "", 10)
+        pdf.cell(40, 8, str(target_place), 1, 0, 'C')
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 8, "지시사항", 1, 0, 'C', True)
+        pdf.cell(80, 8, "", 1, 1, 'C')
 
-    pdf.set_font("Nanum", "B", 10)
-    pdf.cell(30, 10, "합계", 1, 0, 'C', True)
-    pdf.cell(35, 10, str(t_vis), 1, 0, 'C')
-    pdf.cell(35, 10, str(t_lis), 1, 0, 'C')
-    pdf.cell(30, 10, str(t_cnt), 1, 0, 'C')
-    pdf.cell(50, 10, "", 1, 1, 'C')
+        pdf.cell(50, 8, "해설사 성명", 1, 0, 'C', True)
+        pdf.cell(100, 8, "활동 시간 (출퇴근)", 1, 0, 'C', True)
+        pdf.cell(30, 8, "합계 시간", 1, 1, 'C', True)
 
-    pdf.ln(5)
-    pdf.set_font("Nanum", "B", 10)
-    pdf.cell(30, 15, "총 특이사항", 1, 0, 'C', True)
-    
-    pdf.set_font("Nanum", "", 9)
-    all_notes = []
-    if not df_op.empty and '특이사항' in df_op.columns:
-        all_notes = [str(x) for x in df_op['특이사항'].dropna() if str(x).strip()]
-    note_base = " / ".join(all_notes)
-    if len(note_base) > 65: note_base = note_base[:63] + "..."
-    pdf.cell(150, 15, note_base, 1, 1, 'L')
-    
-    pdf.ln(10)
-    pdf.set_font("Nanum", "", 12)
-    pdf.cell(90, 10, "조장 확인 :                         (인/서명)", 0, 0, 'C')
-    pdf.cell(90, 10, "면 담당 확인 :                         (인/서명)", 0, 1, 'C')
+        pdf.set_font("Nanum", "", 10)
+        
+        day_act = df_act[pd.to_datetime(df_act['날짜']).dt.strftime('%Y-%m-%d') == target_date] if not df_act.empty else pd.DataFrame()
+        
+        guides = day_act.to_dict('records') if not day_act.empty else []
+        for i in range(2):
+            if i < len(guides):
+                g = guides[i]
+                g_name = str(g.get('이름', ''))
+                c_in = str(g.get('출근시간', ''))
+                c_out = str(g.get('퇴근시간', ''))
+                
+                t_display = f"{c_in} ~ {c_out}" if c_in and c_out else (c_in if c_in else "")
+                h_total = ""
+                if c_in and c_out:
+                    try:
+                        tdelta = datetime.strptime(c_out, "%H:%M") - datetime.strptime(c_in, "%H:%M")
+                        h_total = str(tdelta.seconds // 3600)
+                    except: pass
+                
+                pdf.cell(50, 8, g_name, 1, 0, 'C')
+                pdf.cell(100, 8, t_display, 1, 0, 'C')
+                pdf.cell(30, 8, h_total, 1, 1, 'C')
+            else:
+                pdf.cell(50, 8, "", 1, 0, 'C')
+                pdf.cell(100, 8, "", 1, 0, 'C')
+                pdf.cell(30, 8, "", 1, 1, 'C')
+                
+        pdf.ln(5)
+
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 10, "시간", 1, 0, 'C', True)
+        pdf.cell(35, 10, "지질명소 탐방객(명)", 1, 0, 'C', True)
+        pdf.cell(35, 10, "해설 청취자(명)", 1, 0, 'C', True)
+        pdf.cell(30, 10, "해설 횟수(회)", 1, 0, 'C', True)
+        pdf.cell(50, 10, "비고(내용 및 특이사항)", 1, 1, 'C', True)
+
+        pdf.set_font("Nanum", "", 9)
+        time_slots = [
+            "08:00~09:00", "09:00~10:00", "10:00~11:00", "11:00~12:00",
+            "12:00~13:00", "13:00~14:00", "14:00~15:00", "15:00~16:00", 
+            "16:00~17:00", "17:00~18:00"
+        ]
+        
+        slot_data = {t: {'vis': 0, 'lis': 0, 'cnt': 0, 'note': []} for t in time_slots}
+        day_op = df_op[pd.to_datetime(df_op['날짜']).dt.strftime('%Y-%m-%d') == target_date] if not df_op.empty else pd.DataFrame()
+        
+        if not day_op.empty:
+            for _, r in day_op.iterrows():
+                in_time = str(r.get('입력시간', ''))
+                try: h = int(in_time.split(':')[0])
+                except: h = 8
+                
+                if h < 8: slot_k = "08:00~09:00"
+                elif h >= 17: slot_k = "17:00~18:00"
+                else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
+                
+                v = int(pd.to_numeric(r.get('탐방객수', 0), errors='coerce') or 0)
+                l = int(pd.to_numeric(r.get('청취자수', 0), errors='coerce') or 0)
+                
+                slot_data[slot_k]['vis'] += v
+                slot_data[slot_k]['lis'] += l
+                
+                # [핵심 수정] 청취자가 1명 이상인 경우에만 해설 횟수를 1 증가시킴
+                if l > 0:
+                    slot_data[slot_k]['cnt'] += 1 
+                
+                if r.get('특이사항'):
+                    slot_data[slot_k]['note'].append(str(r.get('특이사항')))
+        
+        t_vis = 0; t_lis = 0; t_cnt = 0
+        for t in time_slots:
+            d = slot_data[t]
+            v_str = str(d['vis']) if d['vis'] > 0 else ""
+            l_str = str(d['lis']) if d['lis'] > 0 else ""
+            c_str = str(d['cnt']) if d['cnt'] > 0 else ""
+            n_str = ", ".join(d['note'])
+            if len(n_str) > 25: n_str = n_str[:23] + ".."
+            
+            t_vis += d['vis']; t_lis += d['lis']; t_cnt += d['cnt']
+            
+            pdf.cell(30, 8, t, 1, 0, 'C')
+            pdf.cell(35, 8, v_str, 1, 0, 'C')
+            pdf.cell(35, 8, l_str, 1, 0, 'C')
+            pdf.cell(30, 8, c_str, 1, 0, 'C')
+            pdf.cell(50, 8, n_str, 1, 1, 'L')
+
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 10, "합계", 1, 0, 'C', True)
+        pdf.cell(35, 10, str(t_vis), 1, 0, 'C')
+        pdf.cell(35, 10, str(t_lis), 1, 0, 'C')
+        pdf.cell(30, 10, str(t_cnt), 1, 0, 'C')
+        pdf.cell(50, 10, "", 1, 1, 'C')
+
+        pdf.ln(5)
+        pdf.set_font("Nanum", "B", 10)
+        pdf.cell(30, 15, "총 특이사항", 1, 0, 'C', True)
+        
+        pdf.set_font("Nanum", "", 9)
+        all_notes = []
+        if not day_op.empty and '특이사항' in day_op.columns:
+            all_notes = [str(x) for x in day_op['특이사항'].dropna() if str(x).strip()]
+        note_base = " / ".join(all_notes)
+        if len(note_base) > 65: note_base = note_base[:63] + "..."
+        pdf.cell(150, 15, note_base, 1, 1, 'L')
+        
+        pdf.ln(10)
+        pdf.set_font("Nanum", "", 12)
+        pdf.cell(90, 10, "조장 확인 :                         (인/서명)", 0, 0, 'C')
+        pdf.cell(90, 10, "면 담당 확인 :                         (인/서명)", 0, 1, 'C')
 
     return bytes(pdf.output())
 
@@ -428,7 +450,7 @@ def ui_journal_write(name, island):
 
     with t_op:
         st.subheader("해설 실적 등록")
-        st.info("💡 해설을 진행할 때마다 실적을 등록하세요. **1번 등록할 때마다 '해설 횟수'가 1씩 자동으로 카운트**되며, 시간에 맞춰 PDF에 기록됩니다.")
+        st.info("💡 해설을 진행할 때마다 실적을 등록하세요. **청취자가 1명 이상일 경우에만 '해설 횟수'가 카운트**됩니다.")
         
         with st.form("op_form"):
             place_op = st.selectbox("해설 장소", LOCATIONS.get(island, []), key="op_p")
@@ -443,8 +465,11 @@ def ui_journal_write(name, island):
                 row = [today_str, island, place_op, name, now_time, vis, lis, note, str(get_kst_now()), now.year, now.month]
                 
                 if append_data("운영일지", row, cols):
-                    st.success(f"[{now_time}] 실적이 성공적으로 누적 등록되었습니다!")
-                    time.sleep(1); st.rerun()
+                    if lis > 0:
+                        st.success(f"[{now_time}] 실적이 등록되었습니다! (해설 횟수 +1 증가)")
+                    else:
+                        st.success(f"[{now_time}] 방문객 정보가 등록되었습니다! (청취자 0명이므로 해설횟수는 증가 안함)")
+                    time.sleep(1.5); st.rerun()
 
 def ui_view_journal(scope, name, island, role=""):
     st.header("🔍 활동 조회")
@@ -483,7 +508,7 @@ def ui_view_journal(scope, name, island, role=""):
                 st.info("해당 장소 기록 없음")
             else:
                 with st.form("edit_act_form"):
-                    # 화면 표시용으로 날짜를 문자열로 변환 (00:00:00 숨김)
+                    # 화면 표시용 날짜 정리 (00:00:00 삭제)
                     disp_df = filter_act[edit_cols].copy()
                     disp_df['날짜'] = pd.to_datetime(disp_df['날짜']).dt.strftime('%Y-%m-%d')
                     
@@ -524,36 +549,30 @@ def ui_view_journal(scope, name, island, role=""):
                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
             })
 
-    # [핵심 수정] 다운로드 버튼 로직 개선 (경고 문구 명확화)
+    # [핵심 수정] 월 단위 다운로드 및 조건부 노출
     st.divider()
-    st.subheader("📥 일지 다운로드")
+    st.subheader("📥 월간 일지 통합 다운로드")
     
     if sel_place == "전체":
         st.warning("⚠️ 서식 3 운영일지 PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
     elif df_act.empty and df_op.empty:
         st.info("다운로드할 데이터가 없습니다.")
     else:
-        avail_dates = []
-        if not df_act.empty:
-            avail_dates.extend(df_act[df_act['장소'] == sel_place]['날짜'].dt.strftime('%Y-%m-%d').unique().tolist())
-        if not df_op.empty:
-            avail_dates.extend(df_op[df_op['장소'] == sel_place]['날짜'].dt.strftime('%Y-%m-%d').unique().tolist())
+        day_act = df_act[df_act['장소'] == sel_place] if not df_act.empty else pd.DataFrame()
+        day_op = df_op[df_op['장소'] == sel_place] if not df_op.empty else pd.DataFrame()
         
-        avail_dates = sorted(list(set(avail_dates)))
-        
-        if avail_dates:
-            c_d1, c_d2 = st.columns([1, 2])
-            with c_d1: target_d = st.selectbox("출력할 날짜 선택", avail_dates)
-            with c_d2:
-                st.write(""); st.write("")
-                day_act = df_act[(pd.to_datetime(df_act['날짜']).dt.strftime('%Y-%m-%d') == target_d) & (df_act['장소'] == sel_place)] if not df_act.empty else pd.DataFrame()
-                day_op = df_op[(pd.to_datetime(df_op['날짜']).dt.strftime('%Y-%m-%d') == target_d) & (df_op['장소'] == sel_place)] if not df_op.empty else pd.DataFrame()
-                
-                pdf_data = generate_official_journal_pdf(day_act, day_op, target_d, sel_place)
-                if pdf_data:
-                    st.download_button(f"📄 {target_d} 운영일지 PDF 다운로드", pdf_data, f"운영일지_{sel_place}_{target_d}.pdf", "application/pdf", use_container_width=True)
-        else:
+        if day_act.empty and day_op.empty:
             st.info("해당 안내소의 일지 데이터가 없습니다.")
+        else:
+            pdf_data = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place)
+            if pdf_data:
+                st.download_button(
+                    label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 (월간 전체) 다운로드", 
+                    data=pdf_data, 
+                    file_name=f"운영일지_{sel_place}_{vy}년{vm}월.pdf", 
+                    mime="application/pdf", 
+                    use_container_width=True
+                )
 
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
@@ -819,13 +838,15 @@ def ui_stats():
         
         total_v = 0; total_l = 0; total_c = 0
         
+        # 신규 기준 로직 (청취자가 >0 일때만 카운트)
         if not df_op.empty:
-            if '탐방객수' in df_op.columns:
-                total_v += int(pd.to_numeric(df_op['탐방객수'], errors='coerce').fillna(0).sum())
-            if '청취자수' in df_op.columns:
-                total_l += int(pd.to_numeric(df_op['청취자수'], errors='coerce').fillna(0).sum())
+            df_op['탐방객수'] = pd.to_numeric(df_op['탐방객수'], errors='coerce').fillna(0)
+            df_op['청취자수'] = pd.to_numeric(df_op['청취자수'], errors='coerce').fillna(0)
+            total_v += int(df_op['탐방객수'].sum())
+            total_l += int(df_op['청취자수'].sum())
             if '입력시간' in df_op.columns:
-                total_c += len(df_op[df_op['입력시간'] != ""]) 
+                valid_ops = df_op[(df_op['입력시간'] != "") & (df_op['청취자수'] > 0)]
+                total_c += len(valid_ops) 
                 
         if not df_legacy_act.empty:
             if '청취자수' in df_legacy_act.columns and '입력시간' not in df_legacy_act.columns:
@@ -841,12 +862,14 @@ def ui_stats():
         st.divider()
         if not df_op.empty and '장소' in df_op.columns:
             st.subheader("📍 장소별 통계")
-            df_op['탐방객수'] = pd.to_numeric(df_op.get('탐방객수', 0), errors='coerce').fillna(0)
-            df_op['청취자수'] = pd.to_numeric(df_op.get('청취자수', 0), errors='coerce').fillna(0)
             st.dataframe(df_op.groupby('장소')[['탐방객수', '청취자수']].sum().reset_index(), use_container_width=True)
             
             st.subheader("👤 해설사별 실적")
-            grp = df_op.groupby('이름').agg({'청취자수':'sum', '날짜':'count'}).rename(columns={'날짜':'해설횟수'}).reset_index()
+            valid_ops = df_op[df_op['청취자수'] > 0]
+            cnt_grp = valid_ops.groupby('이름').size().reset_index(name='해설횟수')
+            sum_grp = df_op.groupby('이름')['청취자수'].sum().reset_index()
+            grp = pd.merge(sum_grp, cnt_grp, on='이름', how='left').fillna(0)
+            grp['해설횟수'] = grp['해설횟수'].astype(int)
             st.dataframe(grp, use_container_width=True)
 
 # =========================================================
