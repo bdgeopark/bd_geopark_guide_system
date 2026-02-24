@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import time
@@ -32,12 +32,16 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
+# 한국 표준시(KST) 반환 함수
+def get_kst_now():
+    return datetime.utcnow() + timedelta(hours=9)
+
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # 월 상태유지
-if 'cur_year' not in st.session_state: st.session_state['cur_year'] = datetime.now().year
-if 'cur_month' not in st.session_state: st.session_state['cur_month'] = datetime.now().month
+if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_now().year
+if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
 # 2. 데이터 함수 (결측 컬럼 및 레거시 데이터 보호 강화)
@@ -69,7 +73,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 시트별 필수 컬럼 보정 (KeyError 원천 차단)
+        # 시트별 필수 컬럼 보정
         if sheet_name == "활동계획":
             for c in ['대타여부', '기존해설사', '상태']:
                 if c not in df.columns: df[c] = ""
@@ -127,7 +131,6 @@ def save_data(sheet_name, new_rows, header_list):
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
-        # [핵심 수정] 기존에 있던 레거시 데이터 삭제 방지 (있는 컬럼은 유지)
         for col in header_list:
             if col not in final_df.columns: final_df[col] = ""
             
@@ -380,7 +383,7 @@ def ui_journal_write(name, island):
     st.header("📝 일지 작성")
     
     t_act, t_op = st.tabs(["🕒 출퇴근 기록 (활동일지)", "📊 해설 실적 등록 (운영일지)"])
-    now = datetime.now()
+    now = get_kst_now()
     today_str = now.strftime("%Y-%m-%d")
     
     with t_act:
@@ -407,9 +410,9 @@ def ui_journal_write(name, island):
         with col_btn1:
             if not c_in:
                 if st.button("🟢 출근하기", use_container_width=True):
-                    now_time = datetime.now().strftime("%H:%M")
+                    now_time = get_kst_now().strftime("%H:%M")
                     cols = ["날짜", "섬", "장소", "이름", "출근시간", "퇴근시간", "타임스탬프", "년", "월"]
-                    row = [today_str, island, place_act, name, now_time, "", str(datetime.now()), now.year, now.month]
+                    row = [today_str, island, place_act, name, now_time, "", str(get_kst_now()), now.year, now.month]
                     save_data("활동일지", [row], cols)
                     st.success(f"{now_time} 출근 완료!"); time.sleep(0.5); st.rerun()
             else:
@@ -418,9 +421,9 @@ def ui_journal_write(name, island):
         with col_btn2:
             if c_in and not c_out:
                 if st.button("🔴 퇴근하기", use_container_width=True):
-                    now_time = datetime.now().strftime("%H:%M")
+                    now_time = get_kst_now().strftime("%H:%M")
                     cols = ["날짜", "섬", "장소", "이름", "출근시간", "퇴근시간", "타임스탬프", "년", "월"]
-                    row = [today_str, island, place_act, name, c_in, now_time, str(datetime.now()), now.year, now.month]
+                    row = [today_str, island, place_act, name, c_in, now_time, str(get_kst_now()), now.year, now.month]
                     save_data("활동일지", [row], cols)
                     st.success(f"{now_time} 퇴근 완료!"); time.sleep(0.5); st.rerun()
             elif c_out:
@@ -438,9 +441,9 @@ def ui_journal_write(name, island):
             note = st.text_input("특이사항 (교육, 정비 등 내용 입력)")
             
             if st.form_submit_button("💾 실적 1건 등록", use_container_width=True):
-                now_time = datetime.now().strftime("%H:%M")
+                now_time = get_kst_now().strftime("%H:%M")
                 cols = ["날짜", "섬", "장소", "이름", "입력시간", "탐방객수", "청취자수", "특이사항", "타임스탬프", "년", "월"]
-                row = [today_str, island, place_op, name, now_time, vis, lis, note, str(datetime.now()), now.year, now.month]
+                row = [today_str, island, place_op, name, now_time, vis, lis, note, str(get_kst_now()), now.year, now.month]
                 
                 if append_data("운영일지", row, cols):
                     st.success(f"[{now_time}] 실적이 성공적으로 누적 등록되었습니다!")
@@ -468,13 +471,11 @@ def ui_view_journal(scope, name, island, role=""):
     df_act = load_data("활동일지", vy, vm, t_isl)
     df_op = load_data("운영일지", vy, vm, t_isl)
     
-    # 조장 출퇴근 관리
     if role == "조장" or role == "관리자":
         st.subheader("🛠️ 출퇴근 시간 관리 (활동일지 수정)")
         if df_act.empty:
             st.info("출퇴근 기록이 없습니다.")
         else:
-            # KeyError 확실한 방어
             edit_cols = ["날짜", "이름", "장소", "출근시간", "퇴근시간"]
             for c in edit_cols:
                 if c not in df_act.columns: df_act[c] = ""
@@ -501,7 +502,6 @@ def ui_view_journal(scope, name, island, role=""):
                         sh = client.open(SPREADSHEET_NAME).worksheet("활동일지")
                         df_act['날짜'] = pd.to_datetime(df_act['날짜']).dt.strftime("%Y-%m-%d")
                         sh.clear()
-                        # 데이터 유실 방지를 위해 전체 컬럼 덮어쓰기
                         sh.update([df_act.columns.values.tolist()] + df_act.values.tolist())
                         st.cache_data.clear()
                         st.success("출퇴근 시간이 수정되었습니다."); time.sleep(0.5); st.rerun()
@@ -538,9 +538,10 @@ def ui_view_journal(scope, name, island, role=""):
                 if pdf_data:
                     st.download_button(f"📄 {target_d} 운영일지 PDF 다운로드", pdf_data, f"운영일지_{sel_place}_{target_d}.pdf", "application/pdf", use_container_width=True)
 
+
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
-    now = datetime.now()
+    now = get_kst_now()
     nm = now.replace(day=28) + pd.Timedelta(days=4)
     c1,c2,c3=st.columns([1,1,2])
     with c1: py=st.number_input("연도", value=nm.year, key="pi_y")
@@ -582,7 +583,7 @@ def ui_plan_input(name, island):
                 elif "오전" in sel: stat="오전(4시간)"
                 elif "오후" in sel: stat="오후(4시간)"
                 elif "기타" in sel: stat=ein if ein else "미정"
-                row = [pick_s, island, place, name, stat, "", str(datetime.now()), py, pm, "승인대기", "", ""]
+                row = [pick_s, island, place, name, stat, "", str(get_kst_now()), py, pm, "승인대기", "", ""]
                 cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                 save_data("활동계획", [row], cols); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
     else:
@@ -607,7 +608,7 @@ def ui_plan_input(name, island):
                     elif r['오전']: s="오전(4시간)"
                     elif r['오후']: s="오후(4시간)"
                     elif r['기타']: s=str(r['기타'])
-                    rows.append([r['날짜'], island, place, name, s, "", str(datetime.now()), py, pm, "승인대기", "", ""])
+                    rows.append([r['날짜'], island, place, name, s, "", str(get_kst_now()), py, pm, "승인대기", "", ""])
                 cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                 save_data("활동계획", rows, cols); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
 
@@ -697,7 +698,7 @@ def ui_view_plan(scope, name, island, role=""):
                     if "대타" in act and new_u:
                         row = {
                             "날짜": target_d, "섬": t_isl, "장소": t_place, "이름": new_u,
-                            "활동여부": t_stat, "비고": "대타요청", "타임스탬프": str(datetime.now()),
+                            "활동여부": t_stat, "비고": "대타요청", "타임스탬프": str(get_kst_now()),
                             "년": py, "월": pm, "상태": "승인대기", "대타여부": "O", "기존해설사": origin
                         }
                         cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
@@ -722,7 +723,8 @@ def ui_view_plan(scope, name, island, role=""):
 
 def ui_approve(island, role):
     st.header("✅ 계획 승인")
-    now = datetime.now(); nm = now.replace(day=28) + pd.Timedelta(days=4)
+    now = get_kst_now()
+    nm = now.replace(day=28) + pd.Timedelta(days=4)
     c1,c2,c3=st.columns([1,1,2])
     with c1: py=st.number_input("연도", value=nm.year, key="ap_y")
     with c2: pm=st.number_input("월", value=nm.month, key="ap_m")
@@ -801,7 +803,6 @@ def ui_stats():
         
         total_v = 0; total_l = 0; total_c = 0
         
-        # 신규 기준 (건별 운영일지)
         if not df_op.empty:
             if '탐방객수' in df_op.columns:
                 total_v += int(pd.to_numeric(df_op['탐방객수'], errors='coerce').fillna(0).sum())
@@ -810,7 +811,6 @@ def ui_stats():
             if '입력시간' in df_op.columns:
                 total_c += len(df_op[df_op['입력시간'] != ""]) 
                 
-        # 과거 레거시 기준 보완
         if not df_legacy_act.empty:
             if '청취자수' in df_legacy_act.columns and '입력시간' not in df_legacy_act.columns:
                 total_l += int(pd.to_numeric(df_legacy_act['청취자수'], errors='coerce').fillna(0).sum())
@@ -850,11 +850,9 @@ def main():
                     if found:
                         st.session_state['logged_in'] = True
                         st.session_state['user_info'] = found
-                        # st.success 메시지와 sleep을 빼고 바로 새로고침하여 에러 방지 및 속도 향상
                         st.rerun()
                     else: 
                         st.error("로그인 실패: 아이디 또는 비밀번호를 확인해주세요.")
-                # [핵심 수정] 무조건적인 except: 대신 Exception을 명시하여 st.rerun() 충돌 방지
                 except Exception as e: 
                     st.error("구글 서버 연결 실패. 잠시 후 다시 시도해주세요.")
     else:
@@ -870,7 +868,7 @@ def main():
                 
         if role == "관리자":
             t1, t2, t3, t4 = st.tabs(["🔍 활동조회", "🗓️ 계획조회", "📊 통계", "✅ 계획승인"])
-            with t1: ui_view_journal("all", name, island)
+            with t1: ui_view_journal("all", name, island, role)
             with t2: ui_view_plan("all", name, island, role)
             with t3: ui_stats()
             with t4: ui_approve(island, role)
@@ -878,7 +876,7 @@ def main():
         elif role == "조장":
             t1, t2, t3, t4, t5 = st.tabs(["📝 일지작성", "🔍 활동조회", "🗓️ 계획조회", "✍️ 계획입력", "✅ 계획승인"])
             with t1: ui_journal_write(name, island)
-            with t2: ui_view_journal("team", name, island)
+            with t2: ui_view_journal("team", name, island, role)
             with t3: ui_view_plan("team", name, island, role)
             with t4: ui_plan_input(name, island)
             with t5: ui_approve(island, role)
@@ -886,7 +884,7 @@ def main():
         else: # 조원
             t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동", "🗓️ 내 계획", "✍️ 계획입력"])
             with t1: ui_journal_write(name, island)
-            with t2: ui_view_journal("me", name, island)
+            with t2: ui_view_journal("me", name, island, role)
             with t3: ui_view_plan("me", name, island, role)
             with t4: ui_plan_input(name, island)
 
