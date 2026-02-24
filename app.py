@@ -36,15 +36,33 @@ DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
+# 30분 단위 시간 계산 (0~30분 -> 30분 / 31~59분 -> 다음 정시)
+def calc_working_hours(c_in, c_out):
+    if not c_in or not c_out: return ""
+    try:
+        t_in = datetime.strptime(c_in.strip(), "%H:%M")
+        if 0 <= t_in.minute <= 30: t_in = t_in.replace(minute=30)
+        else: t_in = (t_in + timedelta(hours=1)).replace(minute=0)
+
+        t_out = datetime.strptime(c_out.strip(), "%H:%M")
+        if 0 <= t_out.minute <= 30: t_out = t_out.replace(minute=30)
+        else: t_out = (t_out + timedelta(hours=1)).replace(minute=0)
+
+        delta = t_out - t_in
+        hours = delta.total_seconds() / 3600
+        if hours < 0: hours += 24 # 자정 넘기는 경우 방어
+        return str(int(hours)) if hours.is_integer() else str(round(hours, 1))
+    except:
+        return ""
+
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
-# 월 상태유지 (한국 시간 기준)
 if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_now().year
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수 (결측 컬럼 및 날짜 보정 강화)
+# 2. 데이터 함수 (칼럼 꼬임 방지를 위해 Dict 기반으로 재설계)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -73,12 +91,11 @@ def load_data(sheet_name, year=None, month=None, island=None):
         df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 필수 컬럼 보정 (KeyError 방지)
         for c in ["날짜", "이름", "장소", "섬"]:
             if c not in df.columns: df[c] = ""
 
         if sheet_name == "활동계획":
-            for c in ['대타여부', '기존해설사', '상태']:
+            for c in ['대타여부', '기존해설사', '상태', '활동여부']:
                 if c not in df.columns: df[c] = ""
         elif sheet_name == "활동일지":
             for c in ["출근시간", "퇴근시간"]:
@@ -106,39 +123,34 @@ def load_data(sheet_name, year=None, month=None, island=None):
     except Exception as e:
         return pd.DataFrame()
 
-def save_data(sheet_name, new_rows, header_list):
+def save_data(sheet_name, row_dicts):
+    """딕셔너리 기반으로 칼럼을 맞춰서 저장 (데이터 꼬임 완전 방지)"""
     try:
-        try: sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
+        doc = client.open(SPREADSHEET_NAME)
+        try: sh = doc.worksheet(sheet_name)
         except:
-            doc = client.open(SPREADSHEET_NAME)
-            sh = doc.add_worksheet(sheet_name, 1000, len(header_list))
-            sh.append_row(header_list)
+            sh = doc.add_worksheet(sheet_name, 1000, len(row_dicts[0]))
+            sh.append_row(list(row_dicts[0].keys()))
             
         existing = sh.get_all_records()
-        old_df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=header_list)
-        new_df = pd.DataFrame(new_rows, columns=header_list)
+        df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=list(row_dicts[0].keys()))
+        df.columns = [str(c).strip() for c in df.columns]
+        if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        old_df.columns = [str(c).strip() for c in old_df.columns]
-        if '일자' in old_df.columns: old_df.rename(columns={'일자': '날짜'}, inplace=True)
+        new_df = pd.DataFrame(row_dicts)
         
         def make_key(d): return str(d.get('날짜','')) + str(d.get('이름','')) + str(d.get('장소',''))
 
-        if not old_df.empty: old_df['key'] = old_df.apply(make_key, axis=1)
-        else: old_df['key'] = []
+        if not df.empty: df['key'] = df.apply(make_key, axis=1)
+        else: df['key'] = []
         new_df['key'] = new_df.apply(make_key, axis=1)
             
         keys_to_remove = new_df['key'].tolist()
-        if not old_df.empty:
-            final_df = old_df[~old_df['key'].isin(keys_to_remove)].copy()
-        else:
-            final_df = old_df
+        final_df = df[~df['key'].isin(keys_to_remove)].copy() if not df.empty else df
         
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
-        for col in header_list:
-            if col not in final_df.columns: final_df[col] = ""
-            
         combined = pd.concat([final_df, new_df], ignore_index=True).fillna("")
         
         if '날짜' in combined.columns:
@@ -154,19 +166,29 @@ def save_data(sheet_name, new_rows, header_list):
         st.error(f"저장 오류: {e}")
         return False
 
-def append_data(sheet_name, row_data, header_list):
+def append_data(sheet_name, row_dict):
+    """딕셔너리 기반으로 칼럼을 맞춰서 추가 (운영일지 누적용)"""
     try:
-        try: sh = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
+        doc = client.open(SPREADSHEET_NAME)
+        try: sh = doc.worksheet(sheet_name)
         except:
-            doc = client.open(SPREADSHEET_NAME)
-            sh = doc.add_worksheet(sheet_name, 1000, len(header_list))
-            sh.append_row(header_list)
+            sh = doc.add_worksheet(sheet_name, 1000, len(row_dict))
+            sh.append_row(list(row_dict.keys()))
         
-        existing = sh.get_all_values()
-        if not existing:
-            sh.append_row(header_list)
+        existing = sh.get_all_records()
+        df = pd.DataFrame(existing) if existing else pd.DataFrame(columns=list(row_dict.keys()))
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        new_df = pd.DataFrame([row_dict])
+        combined = pd.concat([df, new_df], ignore_index=True).fillna("")
+        
+        if '날짜' in combined.columns:
+            combined['날짜'] = pd.to_datetime(combined['날짜'], errors='coerce')
+            combined = combined.sort_values('날짜')
+            combined['날짜'] = combined['날짜'].dt.strftime("%Y-%m-%d")
             
-        sh.append_row(row_data)
+        sh.clear()
+        sh.update([combined.columns.values.tolist()] + combined.values.tolist())
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -194,7 +216,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
     pdf.add_font("Nanum", "", font_path)
     pdf.add_font("Nanum", "B", font_path)
 
-    # 날짜 필터링을 위한 강력한 문자열 변환
     dates_act = set(pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').dropna().unique()) if not df_act.empty else set()
     dates_op = set(pd.to_datetime(df_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').dropna().unique()) if not df_op.empty else set()
     all_dates = sorted(list(dates_act | dates_op))
@@ -243,12 +264,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 c_out = str(g.get('퇴근시간', ''))
                 
                 t_display = f"{c_in} ~ {c_out}" if c_in and c_out else (c_in if c_in else "")
-                h_total = ""
-                if c_in and c_out:
-                    try:
-                        tdelta = datetime.strptime(c_out, "%H:%M") - datetime.strptime(c_in, "%H:%M")
-                        h_total = str(tdelta.seconds // 3600)
-                    except: pass
+                h_total = calc_working_hours(c_in, c_out) # 30분 단위 반올림 계산 적용
                 
                 pdf.cell(50, 8, g_name, 1, 0, 'C')
                 pdf.cell(100, 8, t_display, 1, 0, 'C')
@@ -348,11 +364,8 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
 def get_display_data(df_plan, df_act, date_list):
     disp_rows = []
     
-    # 강력한 날짜 문자열 변환 적용
-    if not df_plan.empty:
-        df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
-    if not df_act.empty:
-        df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+    if not df_plan.empty: df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+    if not df_act.empty: df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
         
     for d in date_list:
         if isinstance(d, str): d_obj = datetime.strptime(d, "%Y-%m-%d")
@@ -393,9 +406,13 @@ def get_display_data(df_plan, df_act, date_list):
                 if not day_acts.empty:
                     for idx, log in day_acts.iterrows():
                         if idx not in used_log_indices and str(log.get('이름', '')).strip() == str(target_worker).strip():
-                            c_in = str(log.get('출근시간', ''))
-                            c_out = str(log.get('퇴근시간', ''))
-                            if c_in and c_out: t_val = "완료"
+                            c_in = str(log.get('출근시간', '')).strip()
+                            c_out = str(log.get('퇴근시간', '')).strip()
+                            
+                            # 30분 단위 환산 시간 적용
+                            if c_in and c_out: 
+                                h = calc_working_hours(c_in, c_out)
+                                t_val = f"{h}H" if h else "완료"
                             elif c_in: t_val = "근무중"
                             else: t_val = "미출근"
                             
@@ -430,7 +447,7 @@ def ui_journal_write(name, island):
         my_act = pd.DataFrame()
         if not df_act.empty:
             df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
-            my_act = df_act[(df_act['d_str'] == today_str) & (df_act['이름'] == name) & (df_act['장소'] == place_act)]
+            my_act = df_act[(df_act['d_str'] == today_str) & (df_act['이름'].astype(str).str.strip() == name.strip()) & (df_act['장소'] == place_act)]
             
         c_in = ""; c_out = ""
         if not my_act.empty:
@@ -444,9 +461,12 @@ def ui_journal_write(name, island):
             if not c_in:
                 if st.button("🟢 출근하기", use_container_width=True):
                     now_time = get_kst_now().strftime("%H:%M")
-                    cols = ["날짜", "섬", "장소", "이름", "출근시간", "퇴근시간", "타임스탬프", "년", "월"]
-                    row = [today_str, island, place_act, name, now_time, "", str(get_kst_now()), now.year, now.month]
-                    save_data("활동일지", [row], cols)
+                    row_dict = {
+                        "날짜": today_str, "섬": island, "장소": place_act, "이름": name,
+                        "출근시간": now_time, "퇴근시간": "", "타임스탬프": str(get_kst_now()),
+                        "년": now.year, "월": now.month
+                    }
+                    save_data("활동일지", [row_dict])
                     st.success(f"{now_time} 출근 완료!"); time.sleep(0.5); st.rerun()
             else:
                 st.button("🟢 출근 완료", disabled=True, use_container_width=True)
@@ -455,9 +475,12 @@ def ui_journal_write(name, island):
             if c_in and not c_out:
                 if st.button("🔴 퇴근하기", use_container_width=True):
                     now_time = get_kst_now().strftime("%H:%M")
-                    cols = ["날짜", "섬", "장소", "이름", "출근시간", "퇴근시간", "타임스탬프", "년", "월"]
-                    row = [today_str, island, place_act, name, c_in, now_time, str(get_kst_now()), now.year, now.month]
-                    save_data("활동일지", [row], cols)
+                    row_dict = {
+                        "날짜": today_str, "섬": island, "장소": place_act, "이름": name,
+                        "출근시간": c_in, "퇴근시간": now_time, "타임스탬프": str(get_kst_now()),
+                        "년": now.year, "월": now.month
+                    }
+                    save_data("활동일지", [row_dict])
                     st.success(f"{now_time} 퇴근 완료!"); time.sleep(0.5); st.rerun()
             elif c_out:
                 st.button("🔴 퇴근 완료", disabled=True, use_container_width=True)
@@ -475,10 +498,13 @@ def ui_journal_write(name, island):
             
             if st.form_submit_button("💾 실적 1건 등록", use_container_width=True):
                 now_time = get_kst_now().strftime("%H:%M")
-                cols = ["날짜", "섬", "장소", "이름", "입력시간", "탐방객수", "청취자수", "특이사항", "타임스탬프", "년", "월"]
-                row = [today_str, island, place_op, name, now_time, vis, lis, note, str(get_kst_now()), now.year, now.month]
+                row_dict = {
+                    "날짜": today_str, "섬": island, "장소": place_op, "이름": name,
+                    "입력시간": now_time, "탐방객수": vis, "청취자수": lis, "특이사항": note,
+                    "타임스탬프": str(get_kst_now()), "년": now.year, "월": now.month
+                }
                 
-                if append_data("운영일지", row, cols):
+                if append_data("운영일지", row_dict):
                     if lis > 0:
                         st.success(f"[{now_time}] 실적이 등록되었습니다! (해설 횟수 +1 증가)")
                     else:
@@ -507,7 +533,7 @@ def ui_view_journal(scope, name, island, role=""):
     df_act = load_data("활동일지", vy, vm, t_isl)
     df_op = load_data("운영일지", vy, vm, t_isl)
     
-    st.subheader("🕒 출퇴근 내역")
+    st.subheader("🕒 출퇴근 내역 (활동일지)")
     if df_act.empty:
         st.info("출퇴근 기록이 없습니다.")
     else:
@@ -515,11 +541,14 @@ def ui_view_journal(scope, name, island, role=""):
         for c in edit_cols:
             if c not in df_act.columns: df_act[c] = ""
         
-        filter_act = df_act[df_act['장소'] == sel_place] if sel_place != "전체" else df_act
-        if scope == "me": filter_act = filter_act[filter_act['이름'] == name]
+        filter_act = df_act.copy()
+        if sel_place != "전체":
+            filter_act = filter_act[filter_act['장소'].astype(str).str.strip() == sel_place.strip()]
+        if scope == "me": 
+            filter_act = filter_act[filter_act['이름'].astype(str).str.strip() == name.strip()]
         
         if filter_act.empty: 
-            st.info("해당 장소 기록 없음")
+            st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
@@ -536,10 +565,6 @@ def ui_view_journal(scope, name, island, role=""):
                                 df_act.loc[idx, '출근시간'] = r['출근시간']
                                 df_act.loc[idx, '퇴근시간'] = r['퇴근시간']
                         
-                        cols = ["날짜", "섬", "장소", "이름", "출근시간", "퇴근시간", "타임스탬프", "년", "월"]
-                        for c in cols:
-                            if c not in df_act.columns: df_act[c] = ""
-                        
                         sh = client.open(SPREADSHEET_NAME).worksheet("활동일지")
                         df_act['날짜'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
                         sh.clear()
@@ -550,14 +575,18 @@ def ui_view_journal(scope, name, island, role=""):
                 st.dataframe(disp_df, hide_index=True, use_container_width=True)
                         
     st.divider()
-    st.subheader("📋 운영 실적 내역")
+    st.subheader("📋 운영 실적 내역 (운영일지)")
     if df_op.empty:
         st.info("등록된 운영 실적이 없습니다.")
     else:
-        filter_op = df_op[df_op['장소'] == sel_place] if sel_place != "전체" else df_op
-        if scope == "me": filter_op = filter_op[filter_op['이름'] == name]
+        filter_op = df_op.copy()
+        if sel_place != "전체":
+            filter_op = filter_op[filter_op['장소'].astype(str).str.strip() == sel_place.strip()]
+        if scope == "me": 
+            filter_op = filter_op[filter_op['이름'].astype(str).str.strip() == name.strip()]
         
-        if filter_op.empty: st.info("조건에 맞는 데이터가 없습니다.")
+        if filter_op.empty: 
+            st.info("조건에 맞는 운영 실적 데이터가 없습니다.")
         else:
             show_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "특이사항"]
             show_cols = [c for c in show_cols if c in filter_op.columns]
@@ -573,8 +602,8 @@ def ui_view_journal(scope, name, island, role=""):
     elif df_act.empty and df_op.empty:
         st.info("다운로드할 데이터가 없습니다.")
     else:
-        day_act = df_act[df_act['장소'] == sel_place] if not df_act.empty else pd.DataFrame()
-        day_op = df_op[df_op['장소'] == sel_place] if not df_op.empty else pd.DataFrame()
+        day_act = df_act[df_act['장소'].astype(str).str.strip() == sel_place.strip()] if not df_act.empty else pd.DataFrame()
+        day_op = df_op[df_op['장소'].astype(str).str.strip() == sel_place.strip()] if not df_op.empty else pd.DataFrame()
         
         if day_act.empty and day_op.empty:
             st.info("해당 안내소의 일지 데이터가 없습니다.")
@@ -603,7 +632,7 @@ def ui_plan_input(name, island):
     dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr else range(16, last+1))]
     
     df = load_data("활동계획", py, pm, island)
-    if not df.empty: df = df[(df['이름']==name) & (df['장소']==place)]
+    if not df.empty: df = df[(df['이름'].astype(str).str.strip()==name.strip()) & (df['장소']==place)]
     
     st.divider()
     mode = st.radio("모드", ["📅 하루씩", "🗓️ 전체"], horizontal=True, key="pi_md")
@@ -619,7 +648,7 @@ def ui_plan_input(name, island):
             df['d_str'] = pd.to_datetime(df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             r = df[df['d_str'] == pick_s]
             if not r.empty:
-                val = r.iloc[0]['활동여부']
+                val = r.iloc[0].get('활동여부', '')
                 if val=="종일": ps="종일 (8시간)"
                 elif "오전" in val: ps="오전 (4시간)"
                 elif "오후" in val: ps="오후 (4시간)"
@@ -634,9 +663,13 @@ def ui_plan_input(name, island):
                 elif "오전" in sel: stat="오전(4시간)"
                 elif "오후" in sel: stat="오후(4시간)"
                 elif "기타" in sel: stat=ein if ein else "미정"
-                row = [pick_s, island, place, name, stat, "", str(get_kst_now()), py, pm, "승인대기", "", ""]
-                cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
-                save_data("활동계획", [row], cols); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
+                
+                row_dict = {
+                    "날짜": pick_s, "섬": island, "장소": place, "이름": name,
+                    "활동여부": stat, "비고": "", "타임스탬프": str(get_kst_now()),
+                    "년": py, "월": pm, "상태": "승인대기", "대타여부": "", "기존해설사": ""
+                }
+                save_data("활동계획", [row_dict]); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
     else:
         grid = []
         d_map = {}
@@ -660,9 +693,13 @@ def ui_plan_input(name, island):
                     elif r['오전']: s="오전(4시간)"
                     elif r['오후']: s="오후(4시간)"
                     elif r['기타']: s=str(r['기타'])
-                    rows.append([r['날짜'], island, place, name, s, "", str(get_kst_now()), py, pm, "승인대기", "", ""])
-                cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
-                save_data("활동계획", rows, cols); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
+                    
+                    rows.append({
+                        "날짜": r['날짜'], "섬": island, "장소": place, "이름": name,
+                        "활동여부": s, "비고": "", "타임스탬프": str(get_kst_now()),
+                        "년": py, "월": pm, "상태": "승인대기", "대타여부": "", "기존해설사": ""
+                    })
+                save_data("활동계획", rows); st.success("승인 대기 상태로 저장되었습니다."); st.rerun()
 
 def ui_view_plan(scope, name, island, role=""):
     st.header("🗓️ 계획 조회 및 수정")
@@ -692,7 +729,7 @@ def ui_view_plan(scope, name, island, role=""):
         if not df_act.empty and '장소' in df_act.columns:
             df_act = df_act[df_act['장소'] == sel_place]
     
-    if scope == "me": df_plan = df_plan[df_plan['이름'] == name]
+    if scope == "me": df_plan = df_plan[df_plan['이름'].astype(str).str.strip() == name.strip()]
     if df_plan.empty: st.info("조건에 맞는 데이터 없음"); return
 
     try: dates = sorted(df_plan['날짜'].dt.strftime('%Y-%m-%d').unique())
@@ -749,13 +786,12 @@ def ui_view_plan(scope, name, island, role=""):
                     if not origin: origin = target_u 
                     
                     if "대타" in act and new_u:
-                        row = {
+                        row_dict = {
                             "날짜": target_d, "섬": t_isl, "장소": t_place, "이름": new_u,
                             "활동여부": t_stat, "비고": "대타요청", "타임스탬프": str(get_kst_now()),
                             "년": py, "월": pm, "상태": "승인대기", "대타여부": "O", "기존해설사": origin
                         }
-                        cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
-                        save_data("활동계획", [list(row.values())], cols)
+                        save_data("활동계획", [row_dict])
                         st.success("대타 지정 요청 완료! (조장 승인 대기)"); time.sleep(1); st.rerun()
                         
                     elif "취소" in act:
@@ -765,7 +801,7 @@ def ui_view_plan(scope, name, island, role=""):
                         if '일자' in ald.columns: ald.rename(columns={'일자': '날짜'}, inplace=True)
                         ald['d_str'] = pd.to_datetime(ald['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
                         
-                        mask = (ald['d_str']==target_d) & (ald['이름']==target_u) & (ald['장소']==t_place)
+                        mask = (ald['d_str']==target_d) & (ald['이름'].astype(str).str.strip()==str(target_u).strip()) & (ald['장소']==t_place)
                         ald.loc[mask, '상태'] = '취소대기'
                         rem = ald.drop(columns=['d_str'])
                         sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
@@ -822,17 +858,22 @@ def ui_approve(island, role):
                 save_rows = []
                 for _, r in raw_df.iterrows():
                     d_s = r['날짜'].strftime("%Y-%m-%d") if isinstance(r['날짜'], pd.Timestamp) else str(r['날짜'])
-                    row = [
-                        d_s, r['섬'], r['장소'], r['이름'], r['활동여부'], r['비고'], 
-                        str(r['타임스탬프']), r['년'], r['월'], r['상태'], 
-                        r['대타여부'], r['기존해설사']
-                    ]
-                    save_rows.append(row)
+                    save_rows.append({
+                        "날짜": d_s, "섬": r['섬'], "장소": r['장소'], "이름": r['이름'],
+                        "활동여부": r['활동여부'], "비고": r['비고'], "타임스탬프": str(r['타임스탬프']),
+                        "년": r['년'], "월": r['월'], "상태": r['상태'], "대타여부": r['대타여부'], "기존해설사": r['기존해설사']
+                    })
                 
                 sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
                 cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
                 sh.clear()
-                sh.update([cols] + save_rows)
+                # DataFrame으로 변환해서 칼럼 맞춤 보장
+                final_save_df = pd.DataFrame(save_rows)
+                for c in cols:
+                    if c not in final_save_df.columns: final_save_df[c] = ""
+                final_save_df = final_save_df[cols]
+                
+                sh.update([cols] + final_save_df.values.tolist())
                 st.cache_data.clear()
                 st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                 time.sleep(1.5); st.rerun()
@@ -856,6 +897,7 @@ def ui_stats():
         
         total_v = 0; total_l = 0; total_c = 0
         
+        # 신규 기준 로직 (청취자가 >0 일때만 카운트)
         if not df_op.empty:
             df_op['탐방객수'] = pd.to_numeric(df_op['탐방객수'], errors='coerce').fillna(0)
             df_op['청취자수'] = pd.to_numeric(df_op['청취자수'], errors='coerce').fillna(0)
