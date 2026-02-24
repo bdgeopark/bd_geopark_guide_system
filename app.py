@@ -36,7 +36,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 # =========================================================
-# 2. 데이터 함수
+# 2. 데이터 함수 (캐싱 적용)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -142,7 +142,6 @@ def save_daily_report(act_row, op_row):
     try:
         doc = client.open(SPREADSHEET_NAME)
         
-        # 1. 활동일지 저장
         act_cols = ["날짜", "섬", "장소", "이름", "활동시간", "활동내용", "청취자수", "해설횟수", "타임스탬프", "년", "월"]
         try: sh_act = doc.worksheet("활동일지")
         except: 
@@ -171,7 +170,6 @@ def save_daily_report(act_row, op_row):
         sh_act.clear()
         sh_act.update([df_act.columns.values.tolist()] + df_act.values.tolist())
         
-        # 2. 운영일지 저장 (탐방객 보정)
         op_cols = ["날짜", "섬", "장소", "탐방객수", "특이사항", "타임스탬프", "년", "월"]
         try: sh_op = doc.worksheet("운영일지")
         except: 
@@ -236,10 +234,10 @@ def get_users(island):
 # 3. PDF 및 데이터 가공 로직
 # =========================================================
 
-# [수정] 조장 및 관리자가 다운받는 '서식 3 지질공원 안내소 운영일지' 생성 함수
 def generate_official_journal_pdf(df_merged):
     """
-    제공된 '25_8_1_용틀임.pdf' 서식을 기반으로 1일 1장 분량의 운영일지를 생성합니다.
+    서식 3 지질공원 안내소 운영일지 (수정 반영)
+    해설사/성명을 합치고 깔끔하게 배치
     """
     font_path = "NanumGothic.ttf"
     if not os.path.exists(font_path): return None
@@ -250,7 +248,6 @@ def generate_official_journal_pdf(df_merged):
     pdf.add_font("Nanum", "", font_path)
     pdf.add_font("Nanum", "B", font_path)
 
-    # 날짜와 장소별로 그룹화 (안내소마다 하루에 1장씩 출력)
     df_merged['d_str'] = pd.to_datetime(df_merged['날짜']).dt.strftime('%Y-%m-%d')
     grouped = df_merged.groupby(['d_str', '장소'])
 
@@ -269,7 +266,7 @@ def generate_official_journal_pdf(df_merged):
         pdf.set_font("Nanum", "B", 11)
         pdf.cell(180, 8, f"({d_obj.year}년 {d_obj.month}월 {d_obj.day}일) {w_day}요일", 0, 1, 'R')
 
-        # 3. 상단 헤더 테이블 (안내소, 지시사항, 해설사 정보)
+        # 3. 상단 헤더 테이블 (안내소, 지시사항)
         pdf.set_fill_color(240, 240, 240)
         pdf.set_font("Nanum", "B", 10)
         
@@ -281,30 +278,26 @@ def generate_official_journal_pdf(df_merged):
         pdf.cell(30, 8, "지시사항", 1, 0, 'C', True)
         pdf.cell(80, 8, "", 1, 1, 'C')
 
-        # 두 번째 행
-        pdf.cell(30, 8, "해설사", 1, 0, 'C', True)
-        pdf.cell(40, 8, "성명", 1, 0, 'C', True)
-        pdf.cell(80, 8, "활동 시간", 1, 0, 'C', True)
+        # [수정된 부분] 해설사 정보 헤더를 합치고 시간란을 넓힘
+        pdf.cell(50, 8, "해설사 성명", 1, 0, 'C', True)
+        pdf.cell(100, 8, "활동 시간", 1, 0, 'C', True)
         pdf.cell(30, 8, "합계 시간", 1, 1, 'C', True)
 
-        # 해설사 정보 행 (최대 2명까지 표시, 그 이상은 병합 처리)
         pdf.set_font("Nanum", "", 10)
         guides = group.to_dict('records')
         for i in range(2):
-            # 첫 번째 칸은 빈칸 (해설사 아래)
-            pdf.cell(30, 8, "", 1, 0, 'C')
             if i < len(guides):
                 g = guides[i]
                 g_name = str(g.get('이름', ''))
                 g_time = str(g.get('활동시간', ''))
                 t_display = "08:00~17:00" if g_time == "8" else ("08:00~12:00" if g_time == "4" else "")
                 
-                pdf.cell(40, 8, g_name, 1, 0, 'C')
-                pdf.cell(80, 8, t_display, 1, 0, 'C')
+                pdf.cell(50, 8, g_name, 1, 0, 'C')
+                pdf.cell(100, 8, t_display, 1, 0, 'C')
                 pdf.cell(30, 8, g_time, 1, 1, 'C')
             else:
-                pdf.cell(40, 8, "", 1, 0, 'C')
-                pdf.cell(80, 8, "", 1, 0, 'C')
+                pdf.cell(50, 8, "", 1, 0, 'C')
+                pdf.cell(100, 8, "", 1, 0, 'C')
                 pdf.cell(30, 8, "", 1, 1, 'C')
                 
         pdf.ln(5)
@@ -324,7 +317,6 @@ def generate_official_journal_pdf(df_merged):
             "16:00~17:00", "17:00~18:00"
         ]
         
-        # 시스템상 시간별 데이터가 없으므로 공란으로 출력
         for t in time_slots:
             pdf.cell(30, 8, t, 1, 0, 'C')
             pdf.cell(35, 8, "", 1, 0, 'C')
@@ -332,7 +324,6 @@ def generate_official_journal_pdf(df_merged):
             pdf.cell(30, 8, "", 1, 0, 'C')
             pdf.cell(50, 8, "", 1, 1, 'C')
 
-        # 합계 계산
         t_vis = str(group['탐방객수'].iloc[0]) if not group['탐방객수'].isna().all() and str(group['탐방객수'].iloc[0]) != "" else "0"
         l_sum = int(pd.to_numeric(group['청취자수'], errors='coerce').fillna(0).sum())
         c_sum = int(pd.to_numeric(group['해설횟수'], errors='coerce').fillna(0).sum())
@@ -350,13 +341,11 @@ def generate_official_journal_pdf(df_merged):
         pdf.cell(30, 15, "특이사항", 1, 0, 'C', True)
         
         pdf.set_font("Nanum", "", 9)
-        # 특이사항 텍스트 결합 (운영일지 특이사항 + 개인 활동내용)
         note_base = str(group['특이사항'].iloc[0])
         acts = [str(x).strip() for x in group['활동내용'].dropna().unique() if str(x).strip()]
         if acts:
             note_base += " / [활동] " + ", ".join(acts)
             
-        # 너무 길면 자르기 (1줄 제한)
         if len(note_base) > 65: note_base = note_base[:63] + "..."
         pdf.cell(150, 15, note_base, 1, 1, 'L')
         
@@ -604,7 +593,6 @@ def ui_journal_write(name, island):
 def ui_view_journal(scope, name, island):
     st.header("🔍 활동 조회")
     
-    # 상단 검색 필터
     c1, c2, c3 = st.columns(3)
     with c1: vy = st.number_input("연도", value=datetime.now().year, key="vj_y")
     with c2: vm = st.number_input("월", value=datetime.now().month, key="vj_m")
@@ -657,7 +645,6 @@ def ui_view_journal(scope, name, island):
         "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
     })
     
-    # [새로운 서식 PDF 다운로드 기능]
     st.divider()
     c_dl1, c_dl2 = st.columns(2)
     with c_dl1:
@@ -666,7 +653,7 @@ def ui_view_journal(scope, name, island):
         
     with c_dl2:
         if sel_place == "전체":
-            st.warning("⚠️ 서식 3 운영일지 PDF를 다운로드하려면 먼저 위에서 '특정 안내소'를 선택해주세요.")
+            st.warning("⚠️ 서식 3 운영일지 PDF를 다운로드하려면 특정 안내소를 선택해주세요.")
         else:
             journal_pdf = generate_official_journal_pdf(df_merged)
             if journal_pdf:
