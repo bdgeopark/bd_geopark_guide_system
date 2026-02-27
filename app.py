@@ -59,7 +59,7 @@ def round_time_30min(t_str):
     except:
         return str(t_str)
 
-# 반올림된 시간 기준으로 활동 시간(H) 산정
+# [핵심 로직] 반올림된 시간 기준 활동 시간 산정 (점심시간 12:00~13:00 공제 추가)
 def calc_working_hours(c_in, c_out):
     r_in = round_time_30min(c_in)
     r_out = round_time_30min(c_out)
@@ -67,10 +67,22 @@ def calc_working_hours(c_in, c_out):
     try:
         t_in = datetime.strptime(r_in, "%H:%M")
         t_out = datetime.strptime(r_out, "%H:%M")
-        delta = t_out - t_in
-        hours = delta.total_seconds() / 3600
-        if hours < 0: hours += 24 # 자정 넘김 방어
-        return str(int(hours)) if hours.is_integer() else str(round(hours, 1))
+        
+        # 시간을 소수로 변환 (예: 13:30 -> 13.5)
+        h_in = t_in.hour + t_in.minute / 60.0
+        h_out = t_out.hour + t_out.minute / 60.0
+        if h_out < h_in: h_out += 24.0 # 자정 넘김 방어
+        
+        # 점심시간 12:00 ~ 13:00 겹치는 시간 계산
+        lunch_start = 12.0
+        lunch_end = 13.0
+        overlap = max(0, min(h_out, lunch_end) - max(h_in, lunch_start))
+        
+        # 총 시간에서 점심시간 공제
+        hours = (h_out - h_in) - overlap
+        if hours < 0: hours = 0
+        
+        return str(int(hours)) if float(hours).is_integer() else str(round(hours, 1))
     except:
         return ""
 
@@ -81,7 +93,7 @@ if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_no
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수
+# 2. 데이터 함수 (데이터 누락/오류 차단 강력 로직)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -111,6 +123,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
         
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
+        # 필수 칼럼 강제 주입
         for c in ["날짜", "이름", "장소", "섬"]:
             if c not in df.columns: df[c] = ""
 
@@ -125,6 +138,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
+            # 안전한 날짜 필터 (데이터 증발 방지)
             df['날짜_dt'] = pd.to_datetime(df['날짜'], errors='coerce')
             df = df.dropna(subset=['날짜_dt'])
             
@@ -405,6 +419,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
 
 def get_display_data(df_plan, df_act, date_list):
     disp_rows = []
+    
     if not df_plan.empty: df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
     if not df_act.empty: df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
         
@@ -595,7 +610,6 @@ def ui_view_journal(scope, name, island, role=""):
             disp_df = filter_act[edit_cols].copy()
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             
-            # 활동시간(H) 계산 적용
             disp_df['활동시간(H)'] = disp_df.apply(lambda r: calc_working_hours(r.get('출근시간',''), r.get('퇴근시간','')), axis=1)
             tot_hours = sum([float(x) for x in disp_df['활동시간(H)'] if x])
             tot_hours_str = str(int(tot_hours)) if tot_hours.is_integer() else str(round(tot_hours, 1))
@@ -618,7 +632,7 @@ def ui_view_journal(scope, name, island, role=""):
                         sh = client.open(SPREADSHEET_NAME).worksheet("활동일지")
                         df_act['날짜'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
                         sh.clear()
-                        sh.update([df_act.columns.values.tolist()] + df_act.values.tolist())
+                        sh.update([df_act.columns.values.tolist()] + df_act.astype(str).values.tolist())
                         st.cache_data.clear()
                         st.success("출퇴근 시간이 수정되었습니다."); time.sleep(0.5); st.rerun()
             else:
@@ -646,7 +660,6 @@ def ui_view_journal(scope, name, island, role=""):
             disp_op = filter_op[show_cols].copy()
             disp_op['날짜'] = pd.to_datetime(disp_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             
-            # 계산용 변환
             disp_op['탐방객수'] = disp_op['탐방객수'].apply(safe_int)
             disp_op['청취자수'] = disp_op['청취자수'].apply(safe_int)
             disp_op['해설횟수'] = disp_op['청취자수'].apply(lambda x: 1 if x > 0 else 0)
@@ -655,11 +668,8 @@ def ui_view_journal(scope, name, island, role=""):
             tot_lis = disp_op['청취자수'].sum()
             tot_cnt = disp_op['해설횟수'].sum()
             
-            # 칼럼 재배치
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항"]
             disp_op = disp_op[final_cols]
-            
-            # 합계 행 추가
             disp_op.loc['합계'] = ['합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-']
             
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
@@ -803,8 +813,8 @@ def ui_view_plan(scope, name, island, role=""):
     if df_plan.empty: st.info("조건에 맞는 데이터 없음"); return
 
     try: 
-        df_plan['날짜'] = pd.to_datetime(df_plan['날짜'], errors='coerce')
-        dates = sorted(df_plan['날짜'].dropna().dt.strftime('%Y-%m-%d').unique())
+        df_plan['날짜_temp'] = pd.to_datetime(df_plan['날짜'], errors='coerce')
+        dates = sorted(df_plan['날짜_temp'].dropna().dt.strftime('%Y-%m-%d').unique())
     except: 
         dates = []
     
@@ -877,7 +887,7 @@ def ui_view_plan(scope, name, island, role=""):
                         mask = (ald['d_str']==target_d) & (ald['이름'].astype(str).str.strip()==str(target_u).strip()) & (ald['장소']==t_place)
                         ald.loc[mask, '상태'] = '취소대기'
                         rem = ald.drop(columns=['d_str'])
-                        sh.clear(); sh.update([rem.columns.values.tolist()] + rem.values.tolist())
+                        sh.clear(); sh.update([rem.columns.values.tolist()] + rem.astype(str).values.tolist())
                         st.cache_data.clear()
                         st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
                         
