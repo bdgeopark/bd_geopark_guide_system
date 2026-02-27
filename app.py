@@ -36,7 +36,7 @@ DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
-# 안전한 정수 변환 (ValueError 방지 핵심 로직)
+# 안전한 정수 변환 (ValueError 방지)
 def safe_int(val, default=0):
     try:
         n = pd.to_numeric(val, errors='coerce')
@@ -81,7 +81,7 @@ if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_no
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수 (데이터 누락/오류 차단 강력 로직)
+# 2. 데이터 함수 (데이터 누락/오류 차단 강력 로직으로 완전 개편)
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -106,8 +106,9 @@ def load_data(sheet_name, year=None, month=None, island=None):
         vals = sh.get_all_values()
         if not vals or len(vals) < 2: return pd.DataFrame()
         
-        df = pd.DataFrame(vals[1:], columns=vals[0])
-        df.columns = [str(c).strip() for c in df.columns]
+        headers = [str(h).strip() for h in vals[0]]
+        df = pd.DataFrame(vals[1:], columns=headers)
+        
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
         # 필수 칼럼 강제 주입
@@ -126,11 +127,16 @@ def load_data(sheet_name, year=None, month=None, island=None):
 
         if not df.empty and '날짜' in df.columns:
             # 안전한 날짜 필터 (데이터 증발 방지)
-            temp_dt = pd.to_datetime(df['날짜'], errors='coerce')
-            mask = pd.Series(True, index=df.index)
-            if year: mask &= (temp_dt.dt.year == int(year))
-            if month: mask &= (temp_dt.dt.month == int(month))
-            df = df[mask]
+            df['날짜_dt'] = pd.to_datetime(df['날짜'], errors='coerce')
+            df = df.dropna(subset=['날짜_dt'])
+            
+            if not df.empty:
+                mask = pd.Series(True, index=df.index)
+                if year: mask &= (df['날짜_dt'].dt.year == int(year))
+                if month: mask &= (df['날짜_dt'].dt.month == int(month))
+                df = df[mask]
+                
+            df = df.drop(columns=['날짜_dt'], errors='ignore')
         
         if island and '섬' in df.columns and not df.empty:
             df = df[df['섬'] == island]
@@ -153,10 +159,9 @@ def save_data(sheet_name, row_dicts):
             sh.append_row(headers)
             df = pd.DataFrame(columns=headers)
         else:
-            headers = vals[0]
+            headers = [str(h).strip() for h in vals[0]]
             df = pd.DataFrame(vals[1:], columns=headers)
             
-        df.columns = [str(c).strip() for c in df.columns]
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
         new_df = pd.DataFrame(row_dicts)
@@ -172,9 +177,6 @@ def save_data(sheet_name, row_dicts):
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
-        for col in list(row_dicts[0].keys()):
-            if col not in final_df.columns: final_df[col] = ""
-            
         combined = pd.concat([final_df, new_df], ignore_index=True).fillna("")
         
         if '날짜' in combined.columns:
@@ -188,7 +190,7 @@ def save_data(sheet_name, row_dicts):
             if c not in final_cols: final_cols.append(c)
             
         sh.clear()
-        sh.update([final_cols] + combined[final_cols].values.tolist())
+        sh.update([final_cols] + combined[final_cols].astype(str).values.tolist())
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -196,7 +198,7 @@ def save_data(sheet_name, row_dicts):
         return False
 
 def append_data(sheet_name, row_dict):
-    """헤더 꼬임 방지를 위한 안전한 추가 기능"""
+    """헤더 꼬임/누락 방지를 위한 전체 DataFrame 병합 방식 적용"""
     try:
         doc = client.open(SPREADSHEET_NAME)
         try: sh = doc.worksheet(sheet_name)
@@ -208,14 +210,28 @@ def append_data(sheet_name, row_dict):
         if not vals:
             headers = list(row_dict.keys())
             sh.append_row(headers)
+            df = pd.DataFrame(columns=headers)
         else:
-            headers = vals[0]
+            headers = [str(h).strip() for h in vals[0]]
+            df = pd.DataFrame(vals[1:], columns=headers)
             
-        row_vals = []
-        for h in headers:
-            row_vals.append(str(row_dict.get(h.strip(), "")))
+        if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
+        
+        new_df = pd.DataFrame([row_dict])
+        combined = pd.concat([df, new_df], ignore_index=True).fillna("")
+        
+        if '날짜' in combined.columns:
+            temp_dt = pd.to_datetime(combined['날짜'], errors='coerce')
+            combined['sort_key'] = temp_dt.fillna(pd.Timestamp('1900-01-01'))
+            combined = combined.sort_values('sort_key').drop(columns=['sort_key'])
+            combined['날짜'] = temp_dt.dt.strftime("%Y-%m-%d").fillna(combined['날짜'])
             
-        sh.append_row(row_vals)
+        final_cols = headers.copy()
+        for c in combined.columns:
+            if c not in final_cols: final_cols.append(c)
+            
+        sh.clear()
+        sh.update([final_cols] + combined[final_cols].astype(str).values.tolist())
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -290,7 +306,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 c_in = str(g.get('출근시간', ''))
                 c_out = str(g.get('퇴근시간', ''))
                 
-                # [반올림 로직 적용]
+                # [적용] PDF 표기 시 30분 단위로 반올림된 시간 및 산정된 시간 적용
                 r_in = round_time_30min(c_in)
                 r_out = round_time_30min(c_out)
                 
@@ -337,7 +353,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
                 
-                # [안전 변환 로직 적용 (ValueError 방지)]
+                # [안전 변환 로직 적용]
                 v = safe_int(r.get('탐방객수', 0))
                 l = safe_int(r.get('청취자수', 0))
                 
@@ -441,6 +457,7 @@ def get_display_data(df_plan, df_act, date_list):
                             c_in = str(log.get('출근시간', '')).strip()
                             c_out = str(log.get('퇴근시간', '')).strip()
                             
+                            # [적용] 계획 조회 화면에도 30분 단위 반올림 계산된 시간 적용
                             if c_in and c_out: 
                                 h = calc_working_hours(c_in, c_out)
                                 r_in = round_time_30min(c_in)
@@ -584,6 +601,7 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
+            # 00:00:00 시간을 날려버리기 위해 명시적 변환
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             
             if role in ["조장", "관리자"]:
@@ -906,7 +924,7 @@ def ui_approve(island, role):
                     if c not in final_save_df.columns: final_save_df[c] = ""
                 final_save_df = final_save_df[cols]
                 
-                sh.update([cols] + final_save_df.values.tolist())
+                sh.update([cols] + final_save_df.astype(str).values.tolist())
                 st.cache_data.clear()
                 st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                 time.sleep(1.5); st.rerun()
@@ -1012,7 +1030,7 @@ def main():
             with t5: ui_approve(island, role)
             
         else: # 조원
-            t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동 조회", "🗓️ 내 계획 조회 및 변경", "✍️ 계획입력"])
+            t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동", "🗓️ 내 계획", "✍️ 계획입력"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("me", name, island, role)
             with t3: ui_view_plan("me", name, island, role)
@@ -1020,4 +1038,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
