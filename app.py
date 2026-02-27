@@ -44,7 +44,7 @@ def safe_int(val, default=0):
     except:
         return default
 
-# [추가] 30분 단위 시간 반올림 함수 (00분 유지, 01~30분 -> 30분, 31~59분 -> 다음 정시)
+# 30분 단위 시간 반올림 함수 (00분 유지, 01~30분 -> 30분, 31~59분 -> 다음 정시)
 def round_time_30min(t_str):
     if not t_str: return ""
     try:
@@ -59,7 +59,7 @@ def round_time_30min(t_str):
     except:
         return str(t_str)
 
-# [추가] 반올림된 시간 기준으로 활동 시간(H) 산정
+# 반올림된 시간 기준으로 활동 시간(H) 산정
 def calc_working_hours(c_in, c_out):
     r_in = round_time_30min(c_in)
     r_out = round_time_30min(c_out)
@@ -81,7 +81,7 @@ if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_no
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
 # =========================================================
-# 2. 데이터 함수 (데이터 누락/오류 차단 강력 로직으로 완전 개편)
+# 2. 데이터 함수
 # =========================================================
 @st.cache_resource
 def get_client():
@@ -111,7 +111,6 @@ def load_data(sheet_name, year=None, month=None, island=None):
         
         if '일자' in df.columns: df.rename(columns={'일자': '날짜'}, inplace=True)
         
-        # 필수 칼럼 강제 주입
         for c in ["날짜", "이름", "장소", "섬"]:
             if c not in df.columns: df[c] = ""
 
@@ -126,7 +125,6 @@ def load_data(sheet_name, year=None, month=None, island=None):
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
-            # 안전한 날짜 필터 (데이터 증발 방지)
             df['날짜_dt'] = pd.to_datetime(df['날짜'], errors='coerce')
             df = df.dropna(subset=['날짜_dt'])
             
@@ -177,6 +175,9 @@ def save_data(sheet_name, row_dicts):
         final_df = final_df.drop(columns=['key'], errors='ignore')
         new_df = new_df.drop(columns=['key'], errors='ignore')
         
+        for col in list(row_dicts[0].keys()):
+            if col not in final_df.columns: final_df[col] = ""
+            
         combined = pd.concat([final_df, new_df], ignore_index=True).fillna("")
         
         if '날짜' in combined.columns:
@@ -198,7 +199,6 @@ def save_data(sheet_name, row_dicts):
         return False
 
 def append_data(sheet_name, row_dict):
-    """헤더 꼬임/누락 방지를 위한 전체 DataFrame 병합 방식 적용"""
     try:
         doc = client.open(SPREADSHEET_NAME)
         try: sh = doc.worksheet(sheet_name)
@@ -306,7 +306,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 c_in = str(g.get('출근시간', ''))
                 c_out = str(g.get('퇴근시간', ''))
                 
-                # [적용] PDF 표기 시 30분 단위로 반올림된 시간 및 산정된 시간 적용
                 r_in = round_time_30min(c_in)
                 r_out = round_time_30min(c_out)
                 
@@ -353,18 +352,13 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
                 
-                # [안전 변환 로직 적용]
                 v = safe_int(r.get('탐방객수', 0))
                 l = safe_int(r.get('청취자수', 0))
                 
                 slot_data[slot_k]['vis'] += v
                 slot_data[slot_k]['lis'] += l
-                
-                if l > 0:
-                    slot_data[slot_k]['cnt'] += 1 
-                
-                if str(r.get('특이사항')).strip():
-                    slot_data[slot_k]['note'].append(str(r.get('특이사항')))
+                if l > 0: slot_data[slot_k]['cnt'] += 1 
+                if str(r.get('특이사항')).strip(): slot_data[slot_k]['note'].append(str(r.get('특이사항')))
         
         t_vis = 0; t_lis = 0; t_cnt = 0
         for t in time_slots:
@@ -411,7 +405,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
 
 def get_display_data(df_plan, df_act, date_list):
     disp_rows = []
-    
     if not df_plan.empty: df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
     if not df_act.empty: df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
         
@@ -457,7 +450,6 @@ def get_display_data(df_plan, df_act, date_list):
                             c_in = str(log.get('출근시간', '')).strip()
                             c_out = str(log.get('퇴근시간', '')).strip()
                             
-                            # [적용] 계획 조회 화면에도 30분 단위 반올림 계산된 시간 적용
                             if c_in and c_out: 
                                 h = calc_working_hours(c_in, c_out)
                                 r_in = round_time_30min(c_in)
@@ -601,15 +593,22 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
-            # 00:00:00 시간을 날려버리기 위해 명시적 변환
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            
+            # 활동시간(H) 계산 적용
+            disp_df['활동시간(H)'] = disp_df.apply(lambda r: calc_working_hours(r.get('출근시간',''), r.get('퇴근시간','')), axis=1)
+            tot_hours = sum([float(x) for x in disp_df['활동시간(H)'] if x])
+            tot_hours_str = str(int(tot_hours)) if tot_hours.is_integer() else str(round(tot_hours, 1))
             
             if role in ["조장", "관리자"]:
                 with st.form("edit_act_form"):
-                    edited_act = st.data_editor(disp_df, hide_index=True, use_container_width=True)
+                    col_config = {"활동시간(H)": st.column_config.Column(disabled=True)}
+                    edited_act = st.data_editor(disp_df, hide_index=True, use_container_width=True, column_config=col_config)
+                    st.markdown(f"<div style='text-align:right; font-weight:bold; font-size:18px;'>총 활동시간 합계: {tot_hours_str} H</div>", unsafe_allow_html=True)
                     if st.form_submit_button("변경사항 저장"):
                         df_act_dates = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
                         for _, r in edited_act.iterrows():
+                            if r['날짜'] == '합계': continue
                             d_str = r['날짜']
                             idx = df_act[(df_act_dates == d_str) & (df_act['이름'] == r['이름']) & (df_act['장소'] == r['장소'])].index
                             if not idx.empty:
@@ -623,6 +622,7 @@ def ui_view_journal(scope, name, island, role=""):
                         st.cache_data.clear()
                         st.success("출퇴근 시간이 수정되었습니다."); time.sleep(0.5); st.rerun()
             else:
+                disp_df.loc['합계'] = ['합계', '-', '-', '-', '-', f"{tot_hours_str}"]
                 st.dataframe(disp_df, hide_index=True, use_container_width=True)
                         
     st.divider()
@@ -640,9 +640,28 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 운영 실적 데이터가 없습니다.")
         else:
             show_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "특이사항"]
-            show_cols = [c for c in show_cols if c in filter_op.columns]
+            for c in show_cols:
+                if c not in filter_op.columns: filter_op[c] = ""
+            
             disp_op = filter_op[show_cols].copy()
             disp_op['날짜'] = pd.to_datetime(disp_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            
+            # 계산용 변환
+            disp_op['탐방객수'] = disp_op['탐방객수'].apply(safe_int)
+            disp_op['청취자수'] = disp_op['청취자수'].apply(safe_int)
+            disp_op['해설횟수'] = disp_op['청취자수'].apply(lambda x: 1 if x > 0 else 0)
+            
+            tot_vis = disp_op['탐방객수'].sum()
+            tot_lis = disp_op['청취자수'].sum()
+            tot_cnt = disp_op['해설횟수'].sum()
+            
+            # 칼럼 재배치
+            final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항"]
+            disp_op = disp_op[final_cols]
+            
+            # 합계 행 추가
+            disp_op.loc['합계'] = ['합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-']
+            
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
 
     st.divider()
@@ -783,8 +802,11 @@ def ui_view_plan(scope, name, island, role=""):
     if scope == "me": df_plan = df_plan[df_plan['이름'].astype(str).str.strip() == name.strip()]
     if df_plan.empty: st.info("조건에 맞는 데이터 없음"); return
 
-    try: dates = sorted(df_plan['날짜'].dt.strftime('%Y-%m-%d').unique())
-    except: dates = []
+    try: 
+        df_plan['날짜'] = pd.to_datetime(df_plan['날짜'], errors='coerce')
+        dates = sorted(df_plan['날짜'].dropna().dt.strftime('%Y-%m-%d').unique())
+    except: 
+        dates = []
     
     disp_rows = get_display_data(df_plan, df_act, dates)
     df_disp = pd.DataFrame(disp_rows)
@@ -832,7 +854,7 @@ def ui_view_plan(scope, name, island, role=""):
             if st.button("수정 요청 적용"):
                 try:
                     tr = day_p[day_p['이름']==target_u].iloc[0]
-                    t_place = tr['장소']; t_stat = tr['활동여부']
+                    t_place = tr['장소']; t_stat = tr.get('활동여부', '')
                     origin = tr.get('기존해설사', '')
                     if not origin: origin = target_u 
                     
@@ -911,8 +933,8 @@ def ui_approve(island, role):
                     d_s = r['날짜'].strftime("%Y-%m-%d") if isinstance(r['날짜'], pd.Timestamp) else str(r['날짜'])
                     save_rows.append({
                         "날짜": d_s, "섬": r['섬'], "장소": r['장소'], "이름": r['이름'],
-                        "활동여부": r['활동여부'], "비고": r['비고'], "타임스탬프": str(r['타임스탬프']),
-                        "년": r['년'], "월": r['월'], "상태": r['상태'], "대타여부": r['대타여부'], "기존해설사": r['기존해설사']
+                        "활동여부": r.get('활동여부',''), "비고": r.get('비고',''), "타임스탬프": str(r.get('타임스탬프','')),
+                        "년": r.get('년',''), "월": r.get('월',''), "상태": r.get('상태',''), "대타여부": r.get('대타여부',''), "기존해설사": r.get('기존해설사','')
                     })
                 
                 sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
@@ -949,8 +971,8 @@ def ui_stats():
         total_v = 0; total_l = 0; total_c = 0
         
         if not df_op.empty:
-            df_op['탐방객수'] = pd.to_numeric(df_op.get('탐방객수', 0), errors='coerce').fillna(0)
-            df_op['청취자수'] = pd.to_numeric(df_op.get('청취자수', 0), errors='coerce').fillna(0)
+            df_op['탐방객수'] = df_op['탐방객수'].apply(safe_int)
+            df_op['청취자수'] = df_op['청취자수'].apply(safe_int)
             total_v += int(df_op['탐방객수'].sum())
             total_l += int(df_op['청취자수'].sum())
             if '입력시간' in df_op.columns:
@@ -1015,14 +1037,14 @@ def main():
                 st.session_state['logged_in'] = False; st.rerun()
                 
         if role == "관리자":
-            t1, t2, t3, t4 = st.tabs(["🔍 활동조회", "🗓️ 계획조회", "📊 통계", "✅ 계획승인"])
+            t1, t2, t3, t4 = st.tabs(["🔍 활동 조회", "🗓️ 계획 조회 및 수정", "📊 통계", "✅ 계획 승인"])
             with t1: ui_view_journal("all", name, island, role)
             with t2: ui_view_plan("all", name, island, role)
             with t3: ui_stats()
             with t4: ui_approve(island, role)
             
         elif role == "조장":
-            t1, t2, t3, t4, t5 = st.tabs(["📝 일지작성", "🔍 활동조회", "🗓️ 계획조회", "✍️ 계획입력", "✅ 계획승인"])
+            t1, t2, t3, t4, t5 = st.tabs(["📝 일지 작성", "🔍 활동 조회", "🗓️ 계획 조회 및 수정", "✍️ 계획 입력", "✅ 계획 승인"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("team", name, island, role)
             with t3: ui_view_plan("team", name, island, role)
@@ -1030,7 +1052,7 @@ def main():
             with t5: ui_approve(island, role)
             
         else: # 조원
-            t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동", "🗓️ 내 계획", "✍️ 계획입력"])
+            t1, t2, t3, t4 = st.tabs(["📝 일지 작성", "🔍 내 활동 조회", "🗓️ 내 계획 조회 및 수정", "✍️ 계획 입력"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("me", name, island, role)
             with t3: ui_view_plan("me", name, island, role)
