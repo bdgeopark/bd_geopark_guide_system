@@ -1012,7 +1012,7 @@ def main():
             with t5: ui_approve(island, role)
             
         else: # 조원
-            t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동", "🗓️ 내 계획", "✍️ 계획입력"])
+            t1, t2, t3, t4 = st.tabs(["📝 일지작성", "📅 내 활동 조회", "🗓️ 내 계획 조회 및 변경", "✍️ 계획입력"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("me", name, island, role)
             with t3: ui_view_plan("me", name, island, role)
@@ -1020,3 +1020,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
