@@ -32,7 +32,6 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-# 한국 표준시(KST) 반환
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
@@ -755,54 +754,56 @@ def ui_view_journal(scope, name, island, role=""):
             
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
 
-    st.divider()
-    st.subheader("📥 일지 및 결과보고서 다운로드")
-    
-    if sel_place == "전체":
-        st.warning("⚠️ PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
-    elif df_act.empty and df_op.empty:
-        st.info("다운로드할 데이터가 없습니다.")
-    else:
-        day_act = df_act[df_act['장소'].astype(str).str.strip() == sel_place.strip()] if not df_act.empty else pd.DataFrame()
-        day_op = df_op[df_op['장소'].astype(str).str.strip() == sel_place.strip()] if not df_op.empty else pd.DataFrame()
+    # [수정] 조장 또는 관리자인 경우에만 다운로드 영역을 표시합니다.
+    if role in ["조장", "관리자"]:
+        st.divider()
+        st.subheader("📥 일지 및 결과보고서 다운로드")
         
-        c_dl1, c_dl2 = st.columns(2)
-        with c_dl1:
-            st.markdown("**[운영일지 (서식3)]**")
-            st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
-            if not (day_act.empty and day_op.empty):
-                pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place)
-                if pdf_data_op:
+        if sel_place == "전체":
+            st.warning("⚠️ PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
+        elif df_act.empty and df_op.empty:
+            st.info("다운로드할 데이터가 없습니다.")
+        else:
+            day_act = df_act[df_act['장소'].astype(str).str.strip() == sel_place.strip()] if not df_act.empty else pd.DataFrame()
+            day_op = df_op[df_op['장소'].astype(str).str.strip() == sel_place.strip()] if not df_op.empty else pd.DataFrame()
+            
+            c_dl1, c_dl2 = st.columns(2)
+            with c_dl1:
+                st.markdown("**[운영일지 (서식3)]**")
+                st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
+                if not (day_act.empty and day_op.empty):
+                    pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place)
+                    if pdf_data_op:
+                        st.download_button(
+                            label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
+                            data=pdf_data_op, 
+                            file_name=f"운영일지_{sel_place}_{vy}년{vm}월.pdf", 
+                            mime="application/pdf", 
+                            use_container_width=True
+                        )
+            
+            with c_dl2:
+                st.markdown("**[활동결과보고서]**")
+                pr_res = st.radio("보고서 기간 선택", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True, key="dl_res_pr")
+                
+                df_plan_res = load_data("활동계획", vy, vm, t_isl)
+                if not df_plan_res.empty:
+                    df_plan_res = df_plan_res[df_plan_res['장소'].astype(str).str.strip() == sel_place.strip()]
+                
+                _, last = calendar.monthrange(vy, vm)
+                res_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr_res else range(16, last+1))]
+                disp_rows_res = get_display_data(df_plan_res, day_act, res_dates)
+                
+                pdf_data_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr_res, disp_rows_res)
+                if pdf_data_res:
+                    pr_label = "전반기" if "전반기" in pr_res else "후반기"
                     st.download_button(
-                        label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
-                        data=pdf_data_op, 
-                        file_name=f"운영일지_{sel_place}_{vy}년{vm}월.pdf", 
+                        label=f"📊 {vy}년 {vm}월 {sel_place} 활동결과보고서 ({pr_label})", 
+                        data=pdf_data_res, 
+                        file_name=f"활동결과보고서_{sel_place}_{vy}년{vm}월_{pr_label}.pdf", 
                         mime="application/pdf", 
                         use_container_width=True
                     )
-        
-        with c_dl2:
-            st.markdown("**[활동결과보고서]**")
-            pr_res = st.radio("보고서 기간 선택", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True, key="dl_res_pr")
-            
-            df_plan_res = load_data("활동계획", vy, vm, t_isl)
-            if not df_plan_res.empty:
-                df_plan_res = df_plan_res[df_plan_res['장소'].astype(str).str.strip() == sel_place.strip()]
-            
-            _, last = calendar.monthrange(vy, vm)
-            res_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr_res else range(16, last+1))]
-            disp_rows_res = get_display_data(df_plan_res, day_act, res_dates)
-            
-            pdf_data_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr_res, disp_rows_res)
-            if pdf_data_res:
-                pr_label = "전반기" if "전반기" in pr_res else "후반기"
-                st.download_button(
-                    label=f"📊 {vy}년 {vm}월 {sel_place} 활동결과보고서 ({pr_label})", 
-                    data=pdf_data_res, 
-                    file_name=f"활동결과보고서_{sel_place}_{vy}년{vm}월_{pr_label}.pdf", 
-                    mime="application/pdf", 
-                    use_container_width=True
-                )
 
 def ui_plan_input(name, island):
     st.header("✍️ 계획 입력")
@@ -863,10 +864,11 @@ def ui_plan_input(name, island):
             df['d_str'] = pd.to_datetime(df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             for _, r in df.iterrows(): d_map[r['d_str']] = r
         for d in dates:
-            curr = d_map.get(d, "") if isinstance(d_map.get(d, ""), str) else d_map.get(d, {}).get('활동여부', "")
+            curr = d_map.get(d, {})
+            val = curr.get('활동여부', "")
             grid.append({
                 "날짜": d, "요일": DAY_MAP[datetime.strptime(d, "%Y-%m-%d").weekday()],
-                "종일": curr=="종일", "오전": "오전" in curr, "오후": "오후" in curr, "기타": curr if curr not in ["종일","오전(4시간)","오후(4시간)",""] else ""
+                "종일": val=="종일", "오전": "오전" in val, "오후": "오후" in val, "기타": val if val not in ["종일","오전(4시간)","오후(4시간)",""] else ""
             })
         with st.form("pi_m"):
             edited = st.data_editor(pd.DataFrame(grid), hide_index=True, use_container_width=True, height=600)
@@ -936,7 +938,6 @@ def ui_view_plan(scope, name, island, role=""):
         st.info("조건에 맞는 데이터 없음")
         return
 
-    # 월간 전체 조회 (표시용)
     _, last = calendar.monthrange(py, pm)
     full_month_dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
     
@@ -964,7 +965,6 @@ def ui_view_plan(scope, name, island, role=""):
         }
     )
 
-    # [핵심 수정] 활동계획서 다운로드를 전/후반기로 구분 (계획 승인 탭에서 이동됨)
     if sel_place and sel_place != "전체":
         st.divider()
         st.subheader("📥 활동계획서 다운로드")
@@ -1076,7 +1076,6 @@ def ui_approve(island, role):
         
     edited = st.data_editor(df_disp[cols], hide_index=True, use_container_width=True)
     
-    # [수정] 계획 승인에만 집중하도록 버튼 재배치
     if st.button("💾 승인 완료 저장", use_container_width=True):
         try:
             raw_df = load_data("활동계획", py, pm, tis)
