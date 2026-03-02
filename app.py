@@ -262,27 +262,42 @@ def get_users(island):
 # 3. PDF 및 데이터 가공 로직
 # =========================================================
 
-# [핵심] 테이블 데이터 렌더링 및 해설사 목록 추출 (헤더용/결과숨김 지원)
+# [핵심 개편] 해설사 기둥 추출 및 대타/취소 완벽 분리 로직
 def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False, is_plan_only=False):
     disp_rows = []
     unique_workers = []
-    
-    # 1. 헤더 표시용 고유 해설사 명단 추출 (대타는 컬럼 생성 금지)
+
+    if not df_plan.empty: df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+    if not df_act.empty: df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+
+    # 1. 원래 해설사 기둥 세우기 (대타 제외)
     if not df_plan.empty:
         orig_workers = df_plan[df_plan['대타여부'] != 'O']['이름'].astype(str).str.strip().unique().tolist()
         for w in orig_workers:
-            if w not in unique_workers and w: unique_workers.append(w)
-            
-    # 계획 없이 출근한 워크인 인원도 헤더에 추가
+            if w and w not in unique_workers: unique_workers.append(w)
+        
+        # 혹시 기존해설사가 본인 계획 없이 대타만 넘겨준 경우도 기둥 생성
+        replaced_workers = df_plan[df_plan['대타여부'] == 'O']['기존해설사'].astype(str).str.strip().unique().tolist()
+        for w in replaced_workers:
+            if w and w not in unique_workers: unique_workers.append(w)
+
+    # 2. 순수 대타 인원 식별 (기둥을 절대 만들지 않기 위함)
+    pure_subs = []
+    if not df_plan.empty:
+        all_subs = df_plan[df_plan['대타여부'] == 'O']['이름'].astype(str).str.strip().unique().tolist()
+        pure_subs = [s for s in all_subs if s not in unique_workers]
+
+    # 3. 계획 없이 워크인 출근한 인원 추가 (단, 순수 대타는 제외)
     if not df_act.empty:
         act_workers = df_act['이름'].astype(str).str.strip().unique().tolist()
         for w in act_workers:
-            if w not in unique_workers and w: unique_workers.append(w)
-            
-    workers_list = unique_workers[:4] # 최대 4명 칸 고정
-    
-    if not df_plan.empty: df_plan['d_str'] = pd.to_datetime(df_plan['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
-    if not df_act.empty: df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            if w and w not in unique_workers and w not in pure_subs:
+                unique_workers.append(w)
+
+    # 화면 구성을 위해 4칸 고정 생성
+    workers_list = unique_workers[:4]
+    while len(workers_list) < 4:
+        workers_list.append("")
         
     for d in date_list:
         if isinstance(d, str): d_obj = datetime.strptime(d, "%Y-%m-%d")
@@ -294,6 +309,11 @@ def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False,
         day_act = df_act[df_act['d_str'] == d_str] if not df_act.empty else pd.DataFrame()
         
         for i, w in enumerate(workers_list):
+            if not w:
+                row_dat[f'plan_{i}'] = ""
+                row_dat[f'res_{i}'] = ""
+                continue
+
             p_text, r_text = "", ""
             
             orig_plan = day_plan[(day_plan['이름'].astype(str).str.strip() == w) & (day_plan['대타여부'] != 'O')] if not day_plan.empty else pd.DataFrame()
@@ -302,8 +322,8 @@ def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False,
             
             def get_hours(act_df):
                 if act_df.empty: return ""
-                c_in = str(act_df.iloc[0].get('출근시간', '')).split('(')[0].strip()
-                c_out = str(act_df.iloc[0].get('퇴근시간', '')).split('(')[0].strip()
+                c_in = str(act_df.iloc[-1].get('출근시간', '')).split('(')[0].strip()
+                c_out = str(act_df.iloc[-1].get('퇴근시간', '')).split('(')[0].strip()
                 if c_in and c_out:
                     h = calc_working_hours(c_in, c_out)
                     return f"{h}H" if h else ""
@@ -313,11 +333,10 @@ def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False,
             
             p_place = ""
             if show_place and not orig_plan.empty:
-                p_place = f" [{str(orig_plan.iloc[0].get('장소','')).replace(' 안내소', '')}]"
+                p_place = f" [{str(orig_plan.iloc[-1].get('장소','')).replace(' 안내소', '')}]"
 
-            # 기존 계획이 있는 경우
             if not orig_plan.empty:
-                op = orig_plan.iloc[0]
+                op = orig_plan.iloc[-1]
                 plan_time = str(op.get('활동여부', '')).strip()
                 stat = str(op.get('상태', '')).strip()
                 
@@ -326,27 +345,24 @@ def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False,
                 
                 if stat == '취소승인':
                     p_text = f"~~{plan_time}{p_place}~~\n취소"
-                    r_text = "" # 취소된 날은 결과 공백
+                    r_text = "" # 취소된 날 결과는 깔끔하게 공백
                 elif not appr_sub.empty:
-                    sub_name = str(appr_sub.iloc[0]['이름']).strip()
+                    sub_name = str(appr_sub.iloc[-1]['이름']).strip()
                     p_text = f"~~{plan_time}{p_place}~~\n대타({sub_name})"
                     if is_plan_only:
                         r_text = ""
                     else:
                         sub_act = day_act[day_act['이름'].astype(str).str.strip() == sub_name] if not day_act.empty else pd.DataFrame()
                         h = get_hours(sub_act)
-                        r_text = f"{sub_name}\n{h}" if h else f"{sub_name}\n미출근"
+                        r_text = f"{sub_name}\n{h}" if h else "" # 대타 이름 및 산정시간 표시
                 else:
-                    # 대타/취소 승인이 없는 상태
                     if is_pdf:
-                        # 보고서에는 승인된 것만 표시하므로 대기 상태 무시
-                        p_text = f"{plan_time}{p_place}"
+                        p_text = f"{plan_time}{p_place}" # 보고서에는 대기 표시 생략
                     else:
-                        # UI에서는 대기 상태 표시
                         if stat == '취소대기':
                             p_text = f"{plan_time}{p_place} (취소요청)"
                         elif not pend_sub.empty:
-                            sub_name = str(pend_sub.iloc[0]['이름']).strip()
+                            sub_name = str(pend_sub.iloc[-1]['이름']).strip()
                             p_text = f"{plan_time}{p_place} (대타요청:{sub_name})"
                         elif stat == '승인대기':
                             p_text = f"{plan_time}{p_place} (대기)"
@@ -358,10 +374,10 @@ def get_display_data(df_plan, df_act, date_list, show_place=False, is_pdf=False,
                     else:
                         r_text = get_hours(orig_act)
             else:
-                # 원래 계획이 없는 경우 (워크인 등)
+                # 계획 없이 출근만 한 경우
                 if not orig_act.empty:
                     if show_place:
-                        p_place = f" [{str(orig_act.iloc[0].get('장소','')).replace(' 안내소', '')}]"
+                        p_place = f" [{str(orig_act.iloc[-1].get('장소','')).replace(' 안내소', '')}]"
                     p_text = f"(계획없음){p_place}" if not is_pdf else ""
                     if is_plan_only:
                         r_text = ""
@@ -564,7 +580,7 @@ def generate_plan_result_pdf(doc_title, target_place, special_note, p_year, p_mo
         y2 = sy+7; bx = sx+24
         for i in range(8):
             pdf.set_xy(bx+(i*w_c) if i<4 else bx+w_h+((i-4)*w_c), y2)
-            # 해설사 이름 헤더 채우기
+            # 추출된 해설사 이름을 헤더 빈칸에 꽂아 넣음
             w_name = workers_list[i % 4] if (i % 4) < len(workers_list) else ""
             pdf.cell(w_c, 7, w_name, 1, 0, 'C', True)
         pdf.set_xy(sx, sy+14); pdf.set_line_width(0.4); pdf.rect(sx, sy, 180, 14, style="D"); pdf.set_line_width(0.12)
@@ -595,11 +611,11 @@ def generate_plan_result_pdf(doc_title, target_place, special_note, p_year, p_mo
                 pdf.multi_cell(w_c, 4, clean_txt, 1, 'C')
                 pdf.set_xy(bx+(i*w_c), yc); pdf.rect(bx+(i*w_c), yc, w_c, row_h)
                 if "~~" in final_txt:
-                    pdf.line(bx+(i*w_c)+2, yc+2, bx+(i*w_c)+w_c-2, yc+2) # 취소선 긋기
+                    pdf.line(bx+(i*w_c)+2, yc+2, bx+(i*w_c)+w_c-2, yc+2) # 물리적 취소선 긋기
             else:
                 pdf.cell(w_c, row_h, clean_txt, 1, 0, 'C')
                 if "~~" in final_txt:
-                    pdf.line(bx+(i*w_c)+2, yc+(row_h/2), bx+(i*w_c)+w_c-2, yc+(row_h/2)) # 취소선 긋기
+                    pdf.line(bx+(i*w_c)+2, yc+(row_h/2), bx+(i*w_c)+w_c-2, yc+(row_h/2))
                 
         bx += w_h
         for i in range(4):
@@ -704,7 +720,7 @@ def ui_journal_write(name, island):
                     time.sleep(1.5); st.rerun()
 
 def ui_view_journal(scope, name, island, role=""):
-    st.header("🔍 활동 조회" if scope=="all" else "🔍 내 활동 조회")
+    st.header("🔍 내 활동 조회" if scope=="me" else "🔍 활동 조회")
     
     c1, c2, c3 = st.columns(3)
     with c1: 
@@ -990,7 +1006,7 @@ def ui_view_plan(scope, name, island, role=""):
         "요일": st.column_config.Column(width="small"),
     }
     for i in range(4):
-        w_name = workers_list[i] if i < len(workers_list) else f"인원{i+1}"
+        w_name = workers_list[i] if i < len(workers_list) and workers_list[i] else f"빈칸"
         col_config[f"plan_{i}"] = st.column_config.Column(f"계획 ({w_name})", width="small")
         col_config[f"res_{i}"] = st.column_config.Column(f"결과 ({w_name})", width="small")
     
@@ -1088,7 +1104,7 @@ def ui_approve(island, role):
         
     col_config = {"날짜": st.column_config.Column(width="medium"), "요일": st.column_config.Column(width="small")}
     for i in range(4):
-        w_name = workers_list[i] if i < len(workers_list) else f"인원{i+1}"
+        w_name = workers_list[i] if i < len(workers_list) and workers_list[i] else f"빈칸"
         col_config[f"plan_{i}"] = st.column_config.Column(f"계획 ({w_name})", width="small")
         col_config[f"res_{i}"] = st.column_config.Column(f"결과 ({w_name})", width="small")
         
@@ -1178,7 +1194,6 @@ def ui_report_download(island, role):
             elif "후반기" in pr: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(16, last+1)]
             else: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
             
-            # 계획서 전용 렌더링: is_plan_only=True로 설정하여 활동결과를 강제로 숨김
             disp_plan, workers_list = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=True)
             pdf_plan = generate_plan_result_pdf("지질공원 안내소 활동계획서", sel_place, "", vy, vm, pr, disp_plan, workers_list)
             if pdf_plan:
@@ -1186,7 +1201,6 @@ def ui_report_download(island, role):
 
         with col_btn3:
             st.markdown("**3. 활동결과보고서**")
-            # 결과보고서 전용 렌더링: is_plan_only=False로 설정하여 계획과 결과를 모두 표시
             disp_res, workers_list_res = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=False)
             pdf_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr, disp_res, workers_list_res)
             if pdf_res:
