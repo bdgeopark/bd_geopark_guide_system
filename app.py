@@ -32,6 +32,7 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
+# 한국 표준시(KST) 반환
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
@@ -255,7 +256,6 @@ def get_users(island):
 # =========================================================
 
 def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_place):
-    """(서식 3) 운영일지 1일 1장 출력용 PDF"""
     font_path = "NanumGothic.ttf"
     if not os.path.exists(font_path): return None
 
@@ -410,7 +410,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
     return bytes(pdf.output())
 
 def generate_plan_result_pdf(doc_title, target_place, special_note, p_year, p_month, p_range, disp_rows):
-    """활동계획서 및 활동결과보고서 전용 PDF 출력"""
     font_path = "NanumGothic.ttf"
     if not os.path.exists(font_path): return None
 
@@ -757,7 +756,7 @@ def ui_view_journal(scope, name, island, role=""):
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("📥 월간 일지 및 결과보고서 다운로드")
+    st.subheader("📥 일지 및 결과보고서 다운로드")
     
     if sel_place == "전체":
         st.warning("⚠️ PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
@@ -769,11 +768,13 @@ def ui_view_journal(scope, name, island, role=""):
         
         c_dl1, c_dl2 = st.columns(2)
         with c_dl1:
+            st.markdown("**[운영일지 (서식3)]**")
+            st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
             if not (day_act.empty and day_op.empty):
                 pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place)
                 if pdf_data_op:
                     st.download_button(
-                        label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 (서식3)", 
+                        label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
                         data=pdf_data_op, 
                         file_name=f"운영일지_{sel_place}_{vy}년{vm}월.pdf", 
                         mime="application/pdf", 
@@ -781,21 +782,24 @@ def ui_view_journal(scope, name, island, role=""):
                     )
         
         with c_dl2:
-            # 활동결과보고서를 위한 데이터 통합
+            st.markdown("**[활동결과보고서]**")
+            pr_res = st.radio("보고서 기간 선택", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True, key="dl_res_pr")
+            
             df_plan_res = load_data("활동계획", vy, vm, t_isl)
             if not df_plan_res.empty:
                 df_plan_res = df_plan_res[df_plan_res['장소'].astype(str).str.strip() == sel_place.strip()]
             
             _, last = calendar.monthrange(vy, vm)
-            full_month_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
-            disp_rows_res = get_display_data(df_plan_res, day_act, full_month_dates)
+            res_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr_res else range(16, last+1))]
+            disp_rows_res = get_display_data(df_plan_res, day_act, res_dates)
             
-            pdf_data_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, "월간 전체", disp_rows_res)
+            pdf_data_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr_res, disp_rows_res)
             if pdf_data_res:
+                pr_label = "전반기" if "전반기" in pr_res else "후반기"
                 st.download_button(
-                    label=f"📊 {vy}년 {vm}월 {sel_place} 활동결과보고서", 
+                    label=f"📊 {vy}년 {vm}월 {sel_place} 활동결과보고서 ({pr_label})", 
                     data=pdf_data_res, 
-                    file_name=f"활동결과보고서_{sel_place}_{vy}년{vm}월.pdf", 
+                    file_name=f"활동결과보고서_{sel_place}_{vy}년{vm}월_{pr_label}.pdf", 
                     mime="application/pdf", 
                     use_container_width=True
                 )
@@ -859,11 +863,10 @@ def ui_plan_input(name, island):
             df['d_str'] = pd.to_datetime(df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
             for _, r in df.iterrows(): d_map[r['d_str']] = r
         for d in dates:
-            curr = d_map.get(d, {})
-            val = curr.get('활동여부', "")
+            curr = d_map.get(d, "") if isinstance(d_map.get(d, ""), str) else d_map.get(d, {}).get('활동여부', "")
             grid.append({
                 "날짜": d, "요일": DAY_MAP[datetime.strptime(d, "%Y-%m-%d").weekday()],
-                "종일": val=="종일", "오전": "오전" in val, "오후": "오후" in val, "기타": val if val not in ["종일","오전(4시간)","오후(4시간)",""] else ""
+                "종일": curr=="종일", "오전": "오전" in curr, "오후": "오후" in curr, "기타": curr if curr not in ["종일","오전(4시간)","오후(4시간)",""] else ""
             })
         with st.form("pi_m"):
             edited = st.data_editor(pd.DataFrame(grid), hide_index=True, use_container_width=True, height=600)
@@ -904,7 +907,9 @@ def ui_view_plan(scope, name, island, role=""):
     df_plan = load_data("활동계획", py, pm, t_isl)
     df_act = load_data("활동일지", py, pm, t_isl)
     
-    # 본인 조회 시 대타 일정 숨김 처리 완벽 적용
+    if df_plan.empty and df_act.empty: 
+        st.info("데이터 없음"); return
+
     if scope == "me" and not df_plan.empty:
         sub_mask = (df_plan['대타여부'] == 'O') & (df_plan['기존해설사'].astype(str).str.strip() == name.strip())
         sub_rows = df_plan[sub_mask]
@@ -931,7 +936,7 @@ def ui_view_plan(scope, name, island, role=""):
         st.info("조건에 맞는 데이터 없음")
         return
 
-    # 월간 전체 날짜 강제 생성 (빈 날짜도 표시하기 위함)
+    # 월간 전체 조회 (표시용)
     _, last = calendar.monthrange(py, pm)
     full_month_dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
     
@@ -959,15 +964,22 @@ def ui_view_plan(scope, name, island, role=""):
         }
     )
 
+    # [핵심 수정] 활동계획서 다운로드를 전/후반기로 구분 (계획 승인 탭에서 이동됨)
     if sel_place and sel_place != "전체":
         st.divider()
         st.subheader("📥 활동계획서 다운로드")
-        pdf_data_plan = generate_plan_result_pdf("지질공원 안내소 활동계획서", sel_place, "", py, pm, "월간 전체", disp_rows)
+        pr_plan = st.radio("출력 기간 선택", ["전반기(1~15일)", "후반기(16~말일)"], horizontal=True, key="dl_plan_pr")
+        
+        plan_dates = [datetime(py, pm, d).strftime("%Y-%m-%d") for d in (range(1, 16) if "전반기" in pr_plan else range(16, last+1))]
+        disp_rows_plan = get_display_data(df_plan, df_act, plan_dates)
+        
+        pdf_data_plan = generate_plan_result_pdf("지질공원 안내소 활동계획서", sel_place, "", py, pm, pr_plan, disp_rows_plan)
         if pdf_data_plan:
+            pr_label = "전반기" if "전반기" in pr_plan else "후반기"
             st.download_button(
-                label=f"📄 {py}년 {pm}월 {sel_place} 활동계획서 다운로드",
+                label=f"📄 {py}년 {pm}월 {sel_place} 활동계획서 ({pr_label}) 다운로드",
                 data=pdf_data_plan,
-                file_name=f"활동계획서_{sel_place}_{py}년{pm}월.pdf",
+                file_name=f"활동계획서_{sel_place}_{py}년{pm}월_{pr_label}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
@@ -977,59 +989,62 @@ def ui_view_plan(scope, name, island, role=""):
         st.subheader("🛠️ 계획 수정 (대타/취소 요청)")
         with st.expander("수정 메뉴", expanded=True):
             c1, c2 = st.columns(2)
-            avail_dates = [r['날짜'] for r in disp_rows]
-            with c1: target_d = st.selectbox("날짜", sorted(list(set(avail_dates))), key="md_d")
-            
-            df_plan_edit = load_data("활동계획", py, pm, t_isl)
-            df_plan_edit['d_str'] = pd.to_datetime(df_plan_edit['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
-            day_p = df_plan_edit[df_plan_edit['d_str'] == target_d]
-            
-            if sel_place and sel_place != "전체":
-                day_p = day_p[day_p['장소'] == sel_place]
-            
-            pls = day_p['이름'].unique().tolist()
-            with c2: target_u = st.selectbox("대상자 (현재 DB 등록자)", pls, key="md_u")
-            
-            act = st.radio("동작", ["대타 지정 (추가)", "취소 (삭제)"], horizontal=True, key="md_act")
-            new_u = None
-            if "대타" in act:
-                all_u = get_users(t_isl)
-                new_u = st.selectbox("교체 해설사", [u for u in all_u if u != target_u], key="md_n")
-            
-            if st.button("수정 요청 적용"):
-                try:
-                    if target_u not in pls:
-                        st.error("해당 날짜에 선택한 대상자의 계획이 없습니다.")
-                    else:
-                        tr = day_p[day_p['이름']==target_u].iloc[0]
-                        t_place = tr['장소']; t_stat = tr.get('활동여부', '')
-                        origin = tr.get('기존해설사', '')
-                        if not origin: origin = target_u 
-                        
-                        if "대타" in act and new_u:
-                            row_dict = {
-                                "날짜": target_d, "섬": t_isl, "장소": t_place, "이름": new_u,
-                                "활동여부": t_stat, "비고": "대타요청", "타임스탬프": str(get_kst_now()),
-                                "년": py, "월": pm, "상태": "승인대기", "대타여부": "O", "기존해설사": origin
-                            }
-                            save_data("활동계획", [row_dict])
-                            st.success("대타 지정 요청 완료! (조장 승인 대기)"); time.sleep(1); st.rerun()
+            avail_dates = sorted(list(set(pd.to_datetime(df_plan['날짜'], errors='coerce').dropna().dt.strftime('%Y-%m-%d'))))
+            if not avail_dates:
+                st.info("수정할 계획 데이터가 없습니다.")
+            else:
+                with c1: target_d = st.selectbox("날짜", avail_dates, key="md_d")
+                
+                df_plan_edit = load_data("활동계획", py, pm, t_isl)
+                df_plan_edit['d_str'] = pd.to_datetime(df_plan_edit['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+                day_p = df_plan_edit[df_plan_edit['d_str'] == target_d]
+                
+                if sel_place and sel_place != "전체":
+                    day_p = day_p[day_p['장소'] == sel_place]
+                
+                pls = day_p['이름'].unique().tolist()
+                with c2: target_u = st.selectbox("대상자 (현재 DB 등록자)", pls, key="md_u")
+                
+                act = st.radio("동작", ["대타 지정 (추가)", "취소 (삭제)"], horizontal=True, key="md_act")
+                new_u = None
+                if "대타" in act:
+                    all_u = get_users(t_isl)
+                    new_u = st.selectbox("교체 해설사", [u for u in all_u if u != target_u], key="md_n")
+                
+                if st.button("수정 요청 적용"):
+                    try:
+                        if target_u not in pls:
+                            st.error("해당 날짜에 선택한 대상자의 계획이 없습니다.")
+                        else:
+                            tr = day_p[day_p['이름']==target_u].iloc[0]
+                            t_place = tr['장소']; t_stat = tr.get('활동여부', '')
+                            origin = tr.get('기존해설사', '')
+                            if not origin: origin = target_u 
                             
-                        elif "취소" in act:
-                            sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
-                            ald = pd.DataFrame(sh.get_all_records())
-                            ald.columns = [str(c).strip() for c in ald.columns]
-                            if '일자' in ald.columns: ald.rename(columns={'일자': '날짜'}, inplace=True)
-                            ald['d_str'] = pd.to_datetime(ald['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
-                            
-                            mask = (ald['d_str']==target_d) & (ald['이름'].astype(str).str.strip()==str(target_u).strip()) & (ald['장소']==t_place)
-                            ald.loc[mask, '상태'] = '취소대기'
-                            rem = ald.drop(columns=['d_str'])
-                            sh.clear(); sh.update([rem.columns.values.tolist()] + rem.astype(str).values.tolist())
-                            st.cache_data.clear()
-                            st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
-                            
-                except Exception as e: st.error(f"오류: {e}")
+                            if "대타" in act and new_u:
+                                row_dict = {
+                                    "날짜": target_d, "섬": t_isl, "장소": t_place, "이름": new_u,
+                                    "활동여부": t_stat, "비고": "대타요청", "타임스탬프": str(get_kst_now()),
+                                    "년": py, "월": pm, "상태": "승인대기", "대타여부": "O", "기존해설사": origin
+                                }
+                                save_data("활동계획", [row_dict])
+                                st.success("대타 지정 요청 완료! (조장 승인 대기)"); time.sleep(1); st.rerun()
+                                
+                            elif "취소" in act:
+                                sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
+                                ald = pd.DataFrame(sh.get_all_records())
+                                ald.columns = [str(c).strip() for c in ald.columns]
+                                if '일자' in ald.columns: ald.rename(columns={'일자': '날짜'}, inplace=True)
+                                ald['d_str'] = pd.to_datetime(ald['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                                
+                                mask = (ald['d_str']==target_d) & (ald['이름'].astype(str).str.strip()==str(target_u).strip()) & (ald['장소']==t_place)
+                                ald.loc[mask, '상태'] = '취소대기'
+                                rem = ald.drop(columns=['d_str'])
+                                sh.clear(); sh.update([rem.columns.values.tolist()] + rem.astype(str).values.tolist())
+                                st.cache_data.clear()
+                                st.success("취소 요청 완료! (조장 승인 시 삭제됨)"); time.sleep(1); st.rerun()
+                                
+                    except Exception as e: st.error(f"오류: {e}")
 
 def ui_approve(island, role):
     st.header("✅ 계획 승인")
@@ -1061,53 +1076,46 @@ def ui_approve(island, role):
         
     edited = st.data_editor(df_disp[cols], hide_index=True, use_container_width=True)
     
-    c_btn1, c_btn2 = st.columns(2)
-    with c_btn1:
-        if st.button("💾 승인 완료 저장", use_container_width=True):
-            try:
-                raw_df = load_data("활동계획", py, pm, tis)
-                if raw_df.empty:
-                    st.warning("저장할 데이터가 없습니다.")
-                else:
-                    raw_df['d_temp'] = pd.to_datetime(raw_df['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
-                    
-                    cancel_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str)) & (raw_df['상태'] == '취소대기')
-                    raw_df = raw_df[~cancel_mask]
-                    
-                    raw_df['d_temp'] = pd.to_datetime(raw_df['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
-                    approve_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str))
-                    raw_df.loc[approve_mask, '상태'] = "승인완료"
-                    
-                    save_rows = []
-                    for _, r in raw_df.iterrows():
-                        d_s = r['날짜'].strftime("%Y-%m-%d") if isinstance(r['날짜'], pd.Timestamp) else str(r['날짜'])
-                        save_rows.append({
-                            "날짜": d_s, "섬": r['섬'], "장소": r['장소'], "이름": r['이름'],
-                            "활동여부": r.get('활동여부',''), "비고": r.get('비고',''), "타임스탬프": str(r.get('타임스탬프','')),
-                            "년": r.get('년',''), "월": r.get('월',''), "상태": r.get('상태',''), "대타여부": r.get('대타여부',''), "기존해설사": r.get('기존해설사','')
-                        })
-                    
-                    sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
-                    cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
-                    sh.clear()
-                    
-                    final_save_df = pd.DataFrame(save_rows)
-                    for c in cols:
-                        if c not in final_save_df.columns: final_save_df[c] = ""
-                    final_save_df = final_save_df[cols]
-                    
-                    sh.update([cols] + final_save_df.astype(str).values.tolist())
-                    st.cache_data.clear()
-                    st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
-                    time.sleep(1.5); st.rerun()
-            except Exception as e:
-                st.error(f"저장 중 오류 발생: {e}")
-
-    with c_btn2:
-        pdf_data_approve = generate_plan_result_pdf("지질공원 안내소 활동계획서", tpl, "", py, pm, pr, disp_rows)
-        if pdf_data_approve:
-            st.download_button(f"📥 {pr} 활동계획서 PDF 다운로드", pdf_data_approve, f"활동계획서_{tpl}_{py}년{pm}월_{pr}.pdf", "application/pdf", use_container_width=True)
-
+    # [수정] 계획 승인에만 집중하도록 버튼 재배치
+    if st.button("💾 승인 완료 저장", use_container_width=True):
+        try:
+            raw_df = load_data("활동계획", py, pm, tis)
+            if raw_df.empty:
+                st.warning("저장할 데이터가 없습니다.")
+            else:
+                raw_df['d_temp'] = pd.to_datetime(raw_df['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                
+                cancel_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str)) & (raw_df['상태'] == '취소대기')
+                raw_df = raw_df[~cancel_mask]
+                
+                raw_df['d_temp'] = pd.to_datetime(raw_df['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                approve_mask = (raw_df['장소'] == tpl) & (raw_df['d_temp'].isin(dates_str))
+                raw_df.loc[approve_mask, '상태'] = "승인완료"
+                
+                save_rows = []
+                for _, r in raw_df.iterrows():
+                    d_s = r['날짜'].strftime("%Y-%m-%d") if isinstance(r['날짜'], pd.Timestamp) else str(r['날짜'])
+                    save_rows.append({
+                        "날짜": d_s, "섬": r['섬'], "장소": r['장소'], "이름": r['이름'],
+                        "활동여부": r.get('활동여부',''), "비고": r.get('비고',''), "타임스탬프": str(r.get('타임스탬프','')),
+                        "년": r.get('년',''), "월": r.get('월',''), "상태": r.get('상태',''), "대타여부": r.get('대타여부',''), "기존해설사": r.get('기존해설사','')
+                    })
+                
+                sh = client.open(SPREADSHEET_NAME).worksheet("활동계획")
+                cols = ["날짜","섬","장소","이름","활동여부","비고","타임스탬프","년","월","상태","대타여부","기존해설사"]
+                sh.clear()
+                
+                final_save_df = pd.DataFrame(save_rows)
+                for c in cols:
+                    if c not in final_save_df.columns: final_save_df[c] = ""
+                final_save_df = final_save_df[cols]
+                
+                sh.update([cols] + final_save_df.astype(str).values.tolist())
+                st.cache_data.clear()
+                st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
+                time.sleep(1.5); st.rerun()
+        except Exception as e:
+            st.error(f"저장 중 오류 발생: {e}")
 
 def ui_stats():
     st.header("📊 통계")
@@ -1193,14 +1201,14 @@ def main():
                 st.session_state['logged_in'] = False; st.rerun()
                 
         if role == "관리자":
-            t1, t2, t3, t4 = st.tabs(["🔍 활동 조회", "🗓️ 계획 조회 및 수정", "📊 통계", "✅ 계획 승인"])
+            t1, t2, t3, t4 = st.tabs(["🔍 내 활동 조회", "🗓️ 내 계획 조회 및 수정", "📊 통계", "✅ 계획 승인"])
             with t1: ui_view_journal("all", name, island, role)
             with t2: ui_view_plan("all", name, island, role)
             with t3: ui_stats()
             with t4: ui_approve(island, role)
             
         elif role == "조장":
-            t1, t2, t3, t4, t5 = st.tabs(["📝 일지 작성", "🔍 활동 조회", "🗓️ 계획 조회 및 수정", "✍️ 계획 입력", "✅ 계획 승인"])
+            t1, t2, t3, t4, t5 = st.tabs(["📝 일지 작성", "🔍 내 활동 조회", "🗓️ 내 계획 조회 및 수정", "✍️ 계획 입력", "✅ 계획 승인"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("team", name, island, role)
             with t3: ui_view_plan("team", name, island, role)
