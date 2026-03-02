@@ -1197,7 +1197,7 @@ def main():
             with t6: ui_report_download(island, role)
             
         elif role == "조장":
-            t1, t2, t3, t4, t5, t6 = st.tabs(["📝 일지 작성", "🔍 내 활동 조회(팀)", "✍️ 계획 작성", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드"])
+            t1, t2, t3, t4, t5, t6 = st.tabs(["📝 일지 작성", "🔍 내 활동 조회", "✍️ 계획 작성", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드"])
             with t1: ui_journal_write(name, island)
             with t2: ui_view_journal("team", name, island, role)
             with t3: ui_plan_input(name, island)
@@ -1214,3 +1214,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
