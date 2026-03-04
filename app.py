@@ -631,7 +631,6 @@ def generate_plan_result_pdf(doc_title, target_place, special_note, p_year, p_mo
 def ui_journal_write(name, island):
     st.header("📝 일지 작성")
     
-    # [수정] 수기 입력 모드 스위치를 가장 상단에 배치
     is_manual = st.toggle("📅 지난 일지 작성 / 수기 수정 모드", key="jw_manual")
     
     now = get_kst_now()
@@ -677,7 +676,6 @@ def ui_journal_write(name, island):
             st.rerun()
             
     else:
-        # 기존 버튼 방식 UI
         c1, c2 = st.columns(2)
         with c1: place_act = st.selectbox("근무 안내소", LOCATIONS.get(island, []), key="jw_p_btn")
         with c2: st.text_input("현재 날짜", value=today_str, disabled=True)
@@ -727,13 +725,18 @@ def ui_journal_write(name, island):
     st.divider()
     st.subheader("해설 실적 등록 (운영일지)")
     
-    # 운영일지도 수기 모드일 때는 날짜 선택 가능하도록 연동
     if is_manual:
-        op_date = target_date
+        st.write(f"### 🕒 {t_str} 실적 입력 설정")
+        op_time_input = st.time_input("실적 발생 시간 (시:분)", value=datetime.now().time())
+        op_time_str = op_time_input.strftime("%H:%M")
         op_date_str = t_str
+        op_y = target_date.year
+        op_m = target_date.month
     else:
-        op_date = now
+        op_time_str = get_kst_now().strftime("%H:%M")
         op_date_str = today_str
+        op_y = now.year
+        op_m = now.month
         
     with st.form("op_form"):
         place_op = st.selectbox("해설 장소", LOCATIONS.get(island, []), key="op_p")
@@ -743,18 +746,17 @@ def ui_journal_write(name, island):
         note = st.text_input("특이사항 (교육, 정비 등 내용 입력)")
         
         if st.form_submit_button("💾 실적 1건 등록", use_container_width=True):
-            now_time = get_kst_now().strftime("%H:%M")
             row_dict = {
                 "날짜": op_date_str, "섬": island, "장소": place_op, "이름": name,
-                "입력시간": now_time, "탐방객수": vis, "청취자수": lis, "특이사항": note,
-                "타임스탬프": str(get_kst_now()), "년": op_date.year, "월": op_date.month
+                "입력시간": op_time_str, "탐방객수": vis, "청취자수": lis, "특이사항": note,
+                "타임스탬프": str(get_kst_now()), "년": op_y, "월": op_m
             }
             
             if append_data("운영일지", row_dict):
                 if lis > 0:
-                    st.success(f"[{now_time}] 실적이 등록되었습니다! (해설 횟수 +1 증가)")
+                    st.success(f"[{op_time_str}] 실적이 등록되었습니다! (해설 횟수 +1 증가)")
                 else:
-                    st.success(f"[{now_time}] 방문객 정보가 등록되었습니다! (청취자 0명이므로 해설횟수는 증가 안함)")
+                    st.success(f"[{op_time_str}] 방문객 정보가 등록되었습니다! (청취자 0명이므로 해설횟수는 증가 안함)")
                 time.sleep(1.5); st.rerun()
 
 def ui_view_journal(scope, name, island, role=""):
@@ -807,10 +809,8 @@ def ui_view_journal(scope, name, island, role=""):
             tot_hours = sum([float(x) for x in disp_df['활동시간(H)'] if x])
             tot_hours_str = str(int(tot_hours)) if tot_hours.is_integer() else str(round(tot_hours, 1))
             
-            # [수정] 모든 사용자가 본인 데이터를 수정할 수 있도록 허용 (단, 남의 것은 수정 불가)
             with st.form("edit_act_form"):
                 col_config = {"활동시간(H)": st.column_config.Column(disabled=True)}
-                # 조장/관리자가 아니면 이름/장소 등은 수정 불가하게 막을 수도 있으나, 여기서는 날짜/시간 수정 편의를 위해 전체 오픈하되 저장 시 검증
                 edited_act = st.data_editor(disp_df, hide_index=True, use_container_width=True, column_config=col_config)
                 st.markdown(f"<div style='text-align:right; font-weight:bold; font-size:18px;'>총 활동시간 합계: {tot_hours_str} H</div>", unsafe_allow_html=True)
                 
@@ -818,10 +818,7 @@ def ui_view_journal(scope, name, island, role=""):
                     df_act_dates = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
                     for _, r in edited_act.iterrows():
                         if r['날짜'] == '합계': continue
-                        
-                        # 권한 체크: 본인 데이터거나 조장/관리자여야 함
-                        if role not in ["조장", "관리자"] and str(r['이름']).strip() != name.strip():
-                            continue 
+                        if role not in ["조장", "관리자"] and str(r['이름']).strip() != name.strip(): continue 
                             
                         d_str = r['날짜']
                         idx = df_act[(df_act_dates == d_str) & (df_act['이름'] == r['이름']) & (df_act['장소'] == r['장소'])].index
@@ -871,7 +868,6 @@ def ui_view_journal(scope, name, island, role=""):
             
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
 
-    # 보고서 다운로드 영역은 조장/관리자에게만 노출 (기존 유지)
     if role in ["조장", "관리자"]:
         st.divider()
         st.subheader("📥 일지 및 결과보고서 다운로드")
@@ -889,7 +885,7 @@ def ui_view_journal(scope, name, island, role=""):
                 st.markdown("**1. 운영일지 (서식3)**")
                 st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
                 if not (day_act.empty and day_op.empty):
-                    pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, "월간 전체") # 운영일지는 월간 전체 기본
+                    pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, "월간 전체")
                     if pdf_data_op:
                         st.download_button(
                             label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
@@ -1057,9 +1053,6 @@ def ui_view_plan(scope, name, island, role=""):
 
     df_plan = load_data("활동계획", py, pm, t_isl)
     df_act = load_data("활동일지", py, pm, t_isl)
-    
-    if df_plan.empty and df_act.empty: 
-        st.info("데이터 없음"); return
 
     if scope == "me" and not df_plan.empty:
         sub_mask = (df_plan['대타여부'] == 'O') & (df_plan['기존해설사'].astype(str).str.strip() == name.strip())
@@ -1250,67 +1243,10 @@ def ui_approve(island, role):
                 
                 sh.update([cols] + final_save_df.astype(str).values.tolist())
                 st.cache_data.clear()
-                st.success("✅ 승인 완료! (취소된 일정은 취소선으로 표시됩니다)")
+                st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
                 time.sleep(1.5); st.rerun()
         except Exception as e:
             st.error(f"저장 중 오류 발생: {e}")
-
-def ui_report_download(island, role):
-    st.header("📥 보고서 다운로드")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: 
-        vy = st.number_input("연도", value=st.session_state['cur_year'], key="rd_y")
-    with c2: 
-        vm = st.number_input("월", value=st.session_state['cur_month'], key="rd_m")
-    with c3: 
-        pr = st.radio("기간", ["전반기(1~15일)", "후반기(16~말일)", "월간 전체"], key="rd_r")
-    with c4:
-        t_isl = island if role == "조장" else st.selectbox("섬", list(LOCATIONS.keys()), key="rd_isl")
-        place_options = ["선택하세요"] + LOCATIONS.get(t_isl, [])
-        sel_place = st.selectbox("안내소 선택", place_options, key="rd_p")
-        
-    if sel_place != "선택하세요":
-        df_act = load_data("활동일지", vy, vm, t_isl)
-        df_op = load_data("운영일지", vy, vm, t_isl)
-        df_plan = load_data("활동계획", vy, vm, t_isl)
-        
-        day_act = df_act[df_act['장소'].astype(str).str.strip() == sel_place] if not df_act.empty else pd.DataFrame()
-        day_op = df_op[df_op['장소'].astype(str).str.strip() == sel_place] if not df_op.empty else pd.DataFrame()
-        day_plan = df_plan[df_plan['장소'].astype(str).str.strip() == sel_place] if not df_plan.empty else pd.DataFrame()
-        
-        st.divider()
-        st.subheader(f"📄 {vy}년 {vm}월 {sel_place} 보고서")
-        
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
-        
-        with col_btn1:
-            st.markdown("**1. 운영일지 (서식3)**")
-            if not day_act.empty or not day_op.empty:
-                pdf_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, pr)
-                if pdf_op:
-                    st.download_button(f"📥 운영일지 ({pr})", pdf_op, f"운영일지_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
-            else:
-                st.info("데이터 없음")
-                
-        with col_btn2:
-            st.markdown("**2. 활동계획서**")
-            _, last = calendar.monthrange(vy, vm)
-            if "전반기" in pr: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, 16)]
-            elif "후반기" in pr: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(16, last+1)]
-            else: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
-            
-            disp_plan, workers_list = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=True)
-            pdf_plan = generate_plan_result_pdf("지질공원 안내소 활동계획서", sel_place, "", vy, vm, pr, disp_plan, workers_list)
-            if pdf_plan:
-                st.download_button(f"📥 활동계획서 ({pr})", pdf_plan, f"활동계획서_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
-
-        with col_btn3:
-            st.markdown("**3. 활동결과보고서**")
-            disp_res, workers_list_res = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=False)
-            pdf_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr, disp_res, workers_list_res)
-            if pdf_res:
-                st.download_button(f"📥 활동결과보고서 ({pr})", pdf_res, f"활동결과보고서_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
 
 def ui_stats():
     st.header("📊 통계")
