@@ -7,6 +7,7 @@ import time
 import calendar
 import os
 from fpdf import FPDF
+import extra_streamlit_components as stx  # [추가] 쿠키 관리 라이브러리
 
 # =========================================================
 # 1. 초기 설정 및 상수
@@ -86,6 +87,10 @@ def calc_working_hours(c_in, c_out):
         return str(int(hours)) if float(hours).is_integer() else str(round(hours, 1))
     except:
         return ""
+
+# 쿠키 매니저 초기화 (캐시 리소스 제거 - 컴포넌트 특성상)
+def get_manager():
+    return stx.CookieManager()
 
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
@@ -487,12 +492,10 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 try: h = int(in_time.split(':')[0])
                 except: h = 8
                 
-                # [수정] 09:00 ~ 10:00 같은 형식 처리
                 if h < 8: slot_k = "08:00~09:00"
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
                 
-                # [공동해설 로직 적용]
                 is_joint = (str(r.get('공동해설', '')).strip() == 'True')
                 v = safe_int(r.get('탐방객수', 0))
                 l = safe_int(r.get('청취자수', 0))
@@ -753,7 +756,6 @@ def ui_journal_write(name, island):
         
     with st.form("op_form"):
         place_op = st.selectbox("해설 장소", LOCATIONS.get(island, []), key="op_p")
-        
         selected_slot = st.selectbox("실적 시간대 선택", time_slots, index=default_idx)
         
         c1, c2, c3 = st.columns(3)
@@ -900,7 +902,6 @@ def ui_view_journal(scope, name, island, role=""):
         st.divider()
         st.subheader("📥 일지 및 결과보고서 다운로드")
         
-        # [수정] 보고서 다운로드 함수 복구 완료
         if sel_place == "전체":
             st.warning("⚠️ PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
         elif df_act.empty and df_op.empty:
@@ -1355,7 +1356,6 @@ def ui_stats():
             df_op['탐방객수'] = df_op['탐방객수'].apply(safe_int)
             df_op['청취자수'] = df_op['청취자수'].apply(safe_int)
             
-            # [통계 수정: 전체 합계에서만 공동해설 인원 제외]
             valid_stats = df_op[df_op['공동해설'].astype(str) != 'True']
             total_v += int(valid_stats['탐방객수'].sum())
             total_l += int(valid_stats['청취자수'].sum())
@@ -1378,21 +1378,16 @@ def ui_stats():
         st.divider()
         if not df_op.empty and '장소' in df_op.columns:
             st.subheader("📍 장소별 통계")
-            # [통계 수정: 장소별 합계도 공동해설 인원 제외]
             valid_loc_stats = df_op[df_op['공동해설'].astype(str) != 'True']
             st.dataframe(valid_loc_stats.groupby('장소')[['탐방객수', '청취자수']].sum().reset_index(), use_container_width=True)
             
             st.subheader("👤 해설사별 실적")
-            # [통계 수정: 개인 실적은 공동해설 포함 전체 합산]
-            
-            # 1. 횟수 합계 (해설횟수 컬럼 합산, 없으면 청취자수>0 인 행 카운트)
             def get_cnt(r):
                 c = safe_int(r.get('해설횟수'))
                 if c > 0: return c
                 return 1 if safe_int(r.get('청취자수')) > 0 else 0
                 
             df_op['cal_cnt'] = df_op.apply(get_cnt, axis=1)
-            
             sum_grp = df_op.groupby('이름')[['탐방객수', '청취자수', 'cal_cnt']].sum().reset_index()
             sum_grp.rename(columns={'cal_cnt': '해설횟수'}, inplace=True)
             
