@@ -7,7 +7,7 @@ import time
 import calendar
 import os
 from fpdf import FPDF
-import extra_streamlit_components as stx  # [추가] 쿠키 관리 라이브러리
+import extra_streamlit_components as stx
 
 # =========================================================
 # 1. 초기 설정 및 상수
@@ -88,13 +88,8 @@ def calc_working_hours(c_in, c_out):
     except:
         return ""
 
-# 쿠키 매니저 초기화 (캐시 리소스 제거 - 컴포넌트 특성상)
-def get_manager():
-    return stx.CookieManager()
-
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-
 if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_now().year
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
@@ -1397,11 +1392,28 @@ def ui_stats():
 # 5. 메인 실행
 # =========================================================
 def main():
+    stx_manager = get_manager()
+    cookie_val = stx_manager.get(cookie="geopark_login")
+    
+    if cookie_val and not st.session_state['logged_in']:
+        try:
+            sh = client.open(SPREADSHEET_NAME).worksheet("사용자")
+            users = sh.get_all_records()
+            found = next((u for u in users if str(u['아이디']) == str(cookie_val)), None)
+            if found:
+                st.session_state['logged_in'] = True
+                st.session_state['user_info'] = found
+                st.rerun()
+        except:
+            pass
+
     if not st.session_state['logged_in']:
         st.markdown("## 🔐 로그인")
         with st.form("login"):
             uid = st.text_input("아이디")
             upw = st.text_input("비밀번호", type="password")
+            auto_login = st.checkbox("✅ 자동 로그인 유지 (30일)")
+            
             if st.form_submit_button("로그인"):
                 try:
                     sh = client.open(SPREADSHEET_NAME).worksheet("사용자")
@@ -1410,6 +1422,10 @@ def main():
                     if found:
                         st.session_state['logged_in'] = True
                         st.session_state['user_info'] = found
+                        
+                        if auto_login:
+                            stx_manager.set("geopark_login", uid, expires_at=datetime.now() + timedelta(days=30))
+                        
                         st.rerun()
                     else: 
                         st.error("로그인 실패: 아이디 또는 비밀번호를 확인해주세요.")
@@ -1424,7 +1440,9 @@ def main():
         with st.sidebar:
             st.info(f"{name} ({role})")
             if st.button("로그아웃"):
-                st.session_state['logged_in'] = False; st.rerun()
+                stx_manager.delete("geopark_login")
+                st.session_state['logged_in'] = False
+                st.rerun()
                 
         if role == "관리자":
             t1, t2, t3, t4, t5, t6, t7 = st.tabs(["📝 일지 작성", "🔍 활동 조회", "✍️ 계획 작성", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드", "📊 통계"])
