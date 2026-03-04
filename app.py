@@ -134,8 +134,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
             for c in ["출근시간", "퇴근시간"]:
                 if c not in df.columns: df[c] = ""
         elif sheet_name == "운영일지":
-            # [수정] 해설횟수 컬럼 추가
-            for c in ["입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항", "공동해설"]:
+            for c in ["입력시간", "탐방객수", "청취자수", "특이사항", "공동해설", "해설횟수"]:
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
@@ -488,16 +487,17 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 try: h = int(in_time.split(':')[0])
                 except: h = 8
                 
-                # [수정] 30분 단위나 09:00~10:00 같은 형식도 처리되도록 앞부분 추출
+                # [수정] 09:00 ~ 10:00 같은 형식 처리
                 if h < 8: slot_k = "08:00~09:00"
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
                 
+                # [공동해설 로직 적용]
                 is_joint = (str(r.get('공동해설', '')).strip() == 'True')
                 v = safe_int(r.get('탐방객수', 0))
                 l = safe_int(r.get('청취자수', 0))
-                c = safe_int(r.get('해설횟수', 0)) # 직접 입력된 횟수 우선
-                if c == 0 and l > 0: c = 1 # 없으면 청취자 기준 1회 산정
+                c = safe_int(r.get('해설횟수', 0))
+                if c == 0 and l > 0: c = 1
                 
                 if not is_joint: 
                     slot_data[slot_k]['vis'] += v
@@ -735,10 +735,7 @@ def ui_journal_write(name, island):
     st.divider()
     st.subheader("해설 실적 등록 (운영일지)")
     
-    # [시간대 선택 로직] 08:00 ~ 18:00 시간대 리스트 생성
     time_slots = [f"{h:02d}:00 ~ {h+1:02d}:00" for h in range(8, 18)]
-    
-    # 현재 시간에 맞는 슬롯 찾기 (기본값 설정용)
     curr_h = now.hour
     default_idx = 0
     if 8 <= curr_h < 18:
@@ -757,7 +754,6 @@ def ui_journal_write(name, island):
     with st.form("op_form"):
         place_op = st.selectbox("해설 장소", LOCATIONS.get(island, []), key="op_p")
         
-        # [수정] 시간대 선택 드롭박스
         selected_slot = st.selectbox("실적 시간대 선택", time_slots, index=default_idx)
         
         c1, c2, c3 = st.columns(3)
@@ -771,7 +767,7 @@ def ui_journal_write(name, island):
         if st.form_submit_button("💾 실적 등록", use_container_width=True):
             row_dict = {
                 "날짜": op_date_str, "섬": island, "장소": place_op, "이름": name,
-                "입력시간": selected_slot, # 선택된 시간대 저장
+                "입력시간": selected_slot,
                 "탐방객수": vis, "청취자수": lis, "해설횟수": cnt,
                 "특이사항": note, "공동해설": str(is_joint),
                 "타임스탬프": str(get_kst_now()), "년": op_y, "월": op_m
@@ -888,8 +884,6 @@ def ui_view_journal(scope, name, island, role=""):
             
             disp_op['계산용_탐방객'] = disp_op.apply(calc_vis, axis=1)
             disp_op['계산용_청취자'] = disp_op.apply(calc_lis, axis=1)
-            
-            # [수정] 해설횟수는 저장된 값 우선 사용 (없으면 1로 추정)
             disp_op['해설횟수'] = disp_op.apply(lambda x: safe_int(x['해설횟수']) if pd.notna(x['해설횟수']) and str(x['해설횟수'])!='' else (1 if safe_int(x['청취자수']) > 0 else 0), axis=1)
             
             tot_vis = disp_op['계산용_탐방객'].sum()
@@ -906,6 +900,7 @@ def ui_view_journal(scope, name, island, role=""):
         st.divider()
         st.subheader("📥 일지 및 결과보고서 다운로드")
         
+        # [수정] 보고서 다운로드 함수 복구 완료
         if sel_place == "전체":
             st.warning("⚠️ PDF를 다운로드하려면 상단의 '안내소 선택'에서 특정 안내소를 지정해주세요.")
         elif df_act.empty and df_op.empty:
@@ -1282,6 +1277,63 @@ def ui_approve(island, role):
         except Exception as e:
             st.error(f"저장 중 오류 발생: {e}")
 
+def ui_report_download(island, role):
+    st.header("📥 보고서 다운로드")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: 
+        vy = st.number_input("연도", value=st.session_state['cur_year'], key="rd_y")
+    with c2: 
+        vm = st.number_input("월", value=st.session_state['cur_month'], key="rd_m")
+    with c3: 
+        pr = st.radio("기간", ["전반기(1~15일)", "후반기(16~말일)", "월간 전체"], key="rd_r")
+    with c4:
+        t_isl = island if role == "조장" else st.selectbox("섬", list(LOCATIONS.keys()), key="rd_isl")
+        place_options = ["선택하세요"] + LOCATIONS.get(t_isl, [])
+        sel_place = st.selectbox("안내소 선택", place_options, key="rd_p")
+        
+    if sel_place != "선택하세요":
+        df_act = load_data("활동일지", vy, vm, t_isl)
+        df_op = load_data("운영일지", vy, vm, t_isl)
+        df_plan = load_data("활동계획", vy, vm, t_isl)
+        
+        day_act = df_act[df_act['장소'].astype(str).str.strip() == sel_place] if not df_act.empty else pd.DataFrame()
+        day_op = df_op[df_op['장소'].astype(str).str.strip() == sel_place] if not df_op.empty else pd.DataFrame()
+        day_plan = df_plan[df_plan['장소'].astype(str).str.strip() == sel_place] if not df_plan.empty else pd.DataFrame()
+        
+        st.divider()
+        st.subheader(f"📄 {vy}년 {vm}월 {sel_place} 보고서")
+        
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
+        with col_btn1:
+            st.markdown("**1. 운영일지 (서식3)**")
+            if not day_act.empty or not day_op.empty:
+                pdf_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, pr)
+                if pdf_op:
+                    st.download_button(f"📥 운영일지 ({pr})", pdf_op, f"운영일지_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
+            else:
+                st.info("데이터 없음")
+                
+        with col_btn2:
+            st.markdown("**2. 활동계획서**")
+            _, last = calendar.monthrange(vy, vm)
+            if "전반기" in pr: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, 16)]
+            elif "후반기" in pr: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(16, last+1)]
+            else: p_dates = [datetime(vy, vm, d).strftime("%Y-%m-%d") for d in range(1, last+1)]
+            
+            disp_plan, workers_list = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=True)
+            pdf_plan = generate_plan_result_pdf("지질공원 안내소 활동계획서", sel_place, "", vy, vm, pr, disp_plan, workers_list)
+            if pdf_plan:
+                st.download_button(f"📥 활동계획서 ({pr})", pdf_plan, f"활동계획서_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
+
+        with col_btn3:
+            st.markdown("**3. 활동결과보고서**")
+            disp_res, workers_list_res = get_display_data(day_plan, day_act, p_dates, is_pdf=True, is_plan_only=False)
+            pdf_res = generate_plan_result_pdf("지질공원 안내소 활동결과보고서", sel_place, "", vy, vm, pr, disp_res, workers_list_res)
+            if pdf_res:
+                st.download_button(f"📥 활동결과보고서 ({pr})", pdf_res, f"활동결과보고서_{sel_place}_{vy}년{vm}월_{pr}.pdf", "application/pdf", use_container_width=True)
+
 def ui_stats():
     st.header("📊 통계")
     
@@ -1332,11 +1384,8 @@ def ui_stats():
             
             st.subheader("👤 해설사별 실적")
             # [통계 수정: 개인 실적은 공동해설 포함 전체 합산]
-            # [수정] 해설 횟수 계산 시 '해설횟수' 컬럼 값 우선 사용
             
             # 1. 횟수 합계 (해설횟수 컬럼 합산, 없으면 청취자수>0 인 행 카운트)
-            # 여기서는 해설횟수 컬럼이 있다고 가정 (load_data에서 추가됨)
-            # 그러나 기존 데이터는 없을 수 있으므로 로직 보강
             def get_cnt(r):
                 c = safe_int(r.get('해설횟수'))
                 if c > 0: return c
