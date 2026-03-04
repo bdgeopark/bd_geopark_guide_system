@@ -134,7 +134,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
             for c in ["출근시간", "퇴근시간"]:
                 if c not in df.columns: df[c] = ""
         elif sheet_name == "운영일지":
-            for c in ["입력시간", "탐방객수", "청취자수", "특이사항"]:
+            for c in ["입력시간", "탐방객수", "청취자수", "특이사항", "공동해설"]:
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
@@ -491,13 +491,20 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
                 
+                # [공동해설 로직: 전체 통계에서 인원 제외]
+                is_joint = (str(r.get('공동해설', '')).strip() == 'True')
                 v = safe_int(r.get('탐방객수', 0))
                 l = safe_int(r.get('청취자수', 0))
                 
-                slot_data[slot_k]['vis'] += v
-                slot_data[slot_k]['lis'] += l
+                if not is_joint: 
+                    slot_data[slot_k]['vis'] += v
+                    slot_data[slot_k]['lis'] += l
+                
                 if l > 0: slot_data[slot_k]['cnt'] += 1 
-                if str(r.get('특이사항')).strip(): slot_data[slot_k]['note'].append(str(r.get('특이사항')))
+                
+                note_txt = str(r.get('특이사항', '')).strip()
+                if is_joint: note_txt = f"(공동) {note_txt}".strip()
+                if note_txt: slot_data[slot_k]['note'].append(note_txt)
         
         t_vis = 0; t_lis = 0; t_cnt = 0
         for t in time_slots:
@@ -743,20 +750,21 @@ def ui_journal_write(name, island):
         c_op1, c_op2 = st.columns(2)
         vis = c_op1.number_input("탐방객 수 (명)", min_value=0, step=1)
         lis = c_op2.number_input("해설 청취자 수 (명)", min_value=0, step=1)
+        is_joint = st.checkbox("공동해설 (보조 해설사 - 인원통계 미포함)")
         note = st.text_input("특이사항 (교육, 정비 등 내용 입력)")
         
         if st.form_submit_button("💾 실적 1건 등록", use_container_width=True):
             row_dict = {
                 "날짜": op_date_str, "섬": island, "장소": place_op, "이름": name,
                 "입력시간": op_time_str, "탐방객수": vis, "청취자수": lis, "특이사항": note,
-                "타임스탬프": str(get_kst_now()), "년": op_y, "월": op_m
+                "타임스탬프": str(get_kst_now()), "년": op_y, "월": op_m,
+                "공동해설": str(is_joint)
             }
             
             if append_data("운영일지", row_dict):
-                if lis > 0:
-                    st.success(f"[{op_time_str}] 실적이 등록되었습니다! (해설 횟수 +1 증가)")
-                else:
-                    st.success(f"[{op_time_str}] 방문객 정보가 등록되었습니다! (청취자 0명이므로 해설횟수는 증가 안함)")
+                msg = f"[{op_time_str}] 실적이 등록되었습니다!"
+                if is_joint: msg += " (공동해설: 인원 통계 제외)"
+                st.success(msg)
                 time.sleep(1.5); st.rerun()
 
 def ui_view_journal(scope, name, island, role=""):
@@ -847,7 +855,7 @@ def ui_view_journal(scope, name, island, role=""):
         if filter_op.empty: 
             st.info("조건에 맞는 운영 실적 데이터가 없습니다.")
         else:
-            show_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "특이사항"]
+            show_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "공동해설", "특이사항"]
             for c in show_cols:
                 if c not in filter_op.columns: filter_op[c] = ""
             
@@ -856,15 +864,26 @@ def ui_view_journal(scope, name, island, role=""):
             
             disp_op['탐방객수'] = disp_op['탐방객수'].apply(safe_int)
             disp_op['청취자수'] = disp_op['청취자수'].apply(safe_int)
-            disp_op['해설횟수'] = disp_op['청취자수'].apply(lambda x: 1 if x > 0 else 0)
             
-            tot_vis = disp_op['탐방객수'].sum()
-            tot_lis = disp_op['청취자수'].sum()
+            # [통계 계산 수정] 공동해설 체크(True)된 경우 인원수 0 처리
+            def calc_vis(row):
+                return 0 if str(row.get('공동해설')).strip() == 'True' else safe_int(row.get('탐방객수'))
+            def calc_lis(row):
+                return 0 if str(row.get('공동해설')).strip() == 'True' else safe_int(row.get('청취자수'))
+            
+            disp_op['계산용_탐방객'] = disp_op.apply(calc_vis, axis=1)
+            disp_op['계산용_청취자'] = disp_op.apply(calc_lis, axis=1)
+            
+            # 해설횟수는 공동해설이어도 인정
+            disp_op['해설횟수'] = disp_op['청취자수'].apply(lambda x: 1 if safe_int(x) > 0 else 0)
+            
+            tot_vis = disp_op['계산용_탐방객'].sum()
+            tot_lis = disp_op['계산용_청취자'].sum()
             tot_cnt = disp_op['해설횟수'].sum()
             
-            final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항"]
+            final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
-            disp_op.loc['합계'] = ['합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-']
+            disp_op.loc['합계'] = ['합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-', '-']
             
             st.dataframe(disp_op, use_container_width=True, hide_index=True)
 
@@ -1243,7 +1262,7 @@ def ui_approve(island, role):
                 
                 sh.update([cols] + final_save_df.astype(str).values.tolist())
                 st.cache_data.clear()
-                st.success("✅ 승인 완료! (취소 요청된 일정은 완전히 삭제되었습니다)")
+                st.success("✅ 승인 완료! (취소된 일정은 취소선으로 표시됩니다)")
                 time.sleep(1.5); st.rerun()
         except Exception as e:
             st.error(f"저장 중 오류 발생: {e}")
@@ -1268,10 +1287,14 @@ def ui_stats():
         if not df_op.empty:
             df_op['탐방객수'] = df_op['탐방객수'].apply(safe_int)
             df_op['청취자수'] = df_op['청취자수'].apply(safe_int)
-            total_v += int(df_op['탐방객수'].sum())
-            total_l += int(df_op['청취자수'].sum())
+            
+            # [통계 수정: 전체 합계에서만 공동해설 인원 제외]
+            valid_stats = df_op[df_op['공동해설'].astype(str) != 'True']
+            total_v += int(valid_stats['탐방객수'].sum())
+            total_l += int(valid_stats['청취자수'].sum())
+            
             if '입력시간' in df_op.columns:
-                valid_ops = df_op[(df_op['입력시간'] != "") & (df_op['청취자수'] > 0)]
+                valid_ops = df_op[(df_op['입력시간'] != "") & (df_op['청취자수'].apply(safe_int) > 0)]
                 total_c += len(valid_ops) 
                 
         if not df_legacy_act.empty:
@@ -1288,12 +1311,14 @@ def ui_stats():
         st.divider()
         if not df_op.empty and '장소' in df_op.columns:
             st.subheader("📍 장소별 통계")
-            st.dataframe(df_op.groupby('장소')[['탐방객수', '청취자수']].sum().reset_index(), use_container_width=True)
+            # [통계 수정: 장소별 합계도 공동해설 인원 제외]
+            valid_loc_stats = df_op[df_op['공동해설'].astype(str) != 'True']
+            st.dataframe(valid_loc_stats.groupby('장소')[['탐방객수', '청취자수']].sum().reset_index(), use_container_width=True)
             
             st.subheader("👤 해설사별 실적")
-            valid_ops = df_op[df_op['청취자수'] > 0]
-            cnt_grp = valid_ops.groupby('이름').size().reset_index(name='해설횟수')
-            sum_grp = df_op.groupby('이름')['청취자수'].sum().reset_index()
+            # [통계 수정: 개인 실적은 공동해설 포함 전체 합산]
+            cnt_grp = df_op[df_op['청취자수'].apply(safe_int) > 0].groupby('이름').size().reset_index(name='해설횟수')
+            sum_grp = df_op.groupby('이름')[['탐방객수', '청취자수']].sum().reset_index()
             grp = pd.merge(sum_grp, cnt_grp, on='이름', how='left').fillna(0)
             grp['해설횟수'] = grp['해설횟수'].astype(int)
             st.dataframe(grp, use_container_width=True)
