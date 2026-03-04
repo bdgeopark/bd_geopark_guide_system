@@ -33,6 +33,11 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
+# [누락되었던 함수 추가] 쿠키 매니저 로드
+@st.cache_resource(experimental_allow_widgets=True)
+def get_manager():
+    return stx.CookieManager()
+
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
@@ -90,6 +95,7 @@ def calc_working_hours(c_in, c_out):
 
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
+
 if 'cur_year' not in st.session_state: st.session_state['cur_year'] = get_kst_now().year
 if 'cur_month' not in st.session_state: st.session_state['cur_month'] = get_kst_now().month
 
