@@ -33,8 +33,7 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-# [수정] 옵션 제거 (최신 Streamlit 호환)
-@st.cache_resource
+# [수정] 캐시 데코레이터 제거 (위젯은 캐싱 불가)
 def get_manager():
     return stx.CookieManager()
 
@@ -493,6 +492,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 try: h = int(in_time.split(':')[0])
                 except: h = 8
                 
+                # [수정] 09:00 ~ 10:00 같은 형식 처리
                 if h < 8: slot_k = "08:00~09:00"
                 elif h >= 17: slot_k = "17:00~18:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
