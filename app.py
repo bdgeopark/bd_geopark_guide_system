@@ -839,7 +839,6 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
-            # [방어 로직] 날짜 변환 시 발생하는 NaN 방지
             disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             
             disp_df['활동시간(H)'] = disp_df.apply(lambda r: calc_working_hours(str(r.get('출근시간','')).split('(')[0].strip(), str(r.get('퇴근시간','')).split('(')[0].strip()), axis=1)
@@ -850,15 +849,19 @@ def ui_view_journal(scope, name, island, role=""):
             tot_hours = sum([float(x) for x in disp_df['활동시간(H)'] if x])
             tot_hours_str = str(int(tot_hours)) if tot_hours.is_integer() else str(round(tot_hours, 1))
             
-            # [방어 로직] 모든 텍스트 열의 타입을 명확하게 강제 변환
-            disp_df['이름'] = disp_df['이름'].astype(str)
-            disp_df['장소'] = disp_df['장소'].astype(str)
-            disp_df['출근시간'] = disp_df['출근시간'].astype(str)
-            disp_df['퇴근시간'] = disp_df['퇴근시간'].astype(str)
-            disp_df['활동시간(H)'] = disp_df['활동시간(H)'].astype(str)
-            
+            # [방어 로직] 데이터 에디터에 넘기기 전에 모든 타입 명확화 (concat 방식 적용)
             disp_df.insert(0, '삭제', False)
-            disp_df.loc['합계'] = [False, '합계', '-', '-', '-', '-', tot_hours_str]
+            sum_dict = {
+                '삭제': False, '날짜': '합계', '이름': '-', '장소': '-', 
+                '출근시간': '-', '퇴근시간': '-', '활동시간(H)': tot_hours_str
+            }
+            disp_df = pd.concat([disp_df, pd.DataFrame([sum_dict])], ignore_index=True)
+            
+            for col in disp_df.columns:
+                if col == '삭제':
+                    disp_df[col] = disp_df[col].astype(bool)
+                else:
+                    disp_df[col] = disp_df[col].astype(str)
             
             with st.form("edit_act_form"):
                 col_config = {
@@ -921,7 +924,6 @@ def ui_view_journal(scope, name, island, role=""):
                 if c not in filter_op.columns: filter_op[c] = ""
             
             disp_op = filter_op[show_cols].copy()
-            # [방어 로직] 날짜 변환 및 텍스트 데이터 명확화
             disp_op['날짜'] = pd.to_datetime(disp_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             
             disp_op['탐방객수'] = disp_op['탐방객수'].apply(safe_int)
@@ -945,15 +947,20 @@ def ui_view_journal(scope, name, island, role=""):
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
             
-            # [방어 로직] 타입 일치 강제
-            disp_op['장소'] = disp_op['장소'].astype(str)
-            disp_op['이름'] = disp_op['이름'].astype(str)
-            disp_op['입력시간'] = disp_op['입력시간'].astype(str)
-            disp_op['특이사항'] = disp_op['특이사항'].astype(str)
-            disp_op['공동해설'] = disp_op['공동해설'].astype(str)
-            
+            # [방어 로직] concat 방식 및 타입 통일
             disp_op.insert(0, '삭제', False)
-            disp_op.loc['합계'] = [False, '합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-', '-']
+            sum_dict_op = {
+                '삭제': False, '날짜': '합계', '장소': '-', '이름': '-', '입력시간': '-',
+                '탐방객수': int(tot_vis), '청취자수': int(tot_lis), '해설횟수': int(tot_cnt),
+                '공동해설': '-', '특이사항': '-'
+            }
+            disp_op = pd.concat([disp_op, pd.DataFrame([sum_dict_op])], ignore_index=True)
+            
+            for col in ['날짜', '장소', '이름', '입력시간', '공동해설', '특이사항']:
+                disp_op[col] = disp_op[col].fillna("").astype(str)
+            for col in ['탐방객수', '청취자수', '해설횟수']:
+                disp_op[col] = pd.to_numeric(disp_op[col], errors='coerce').fillna(0).astype(int)
+            disp_op['삭제'] = disp_op['삭제'].astype(bool)
             
             with st.form("edit_op_form"):
                 col_config_op = {
