@@ -640,7 +640,6 @@ def generate_plan_result_pdf(doc_title, target_place, special_note, p_year, p_mo
 # 4. UI 탭별 함수
 # =========================================================
 
-# [수정] 조장/관리자의 팀원 수기 입력 지원을 위해 role 파라미터 추가
 def ui_journal_write(name, island, role):
     st.header("📝 일지 작성")
     
@@ -655,7 +654,6 @@ def ui_journal_write(name, island, role):
         with c1: target_date = st.date_input("날짜 선택", value=now.date())
         with c2: place_act = st.selectbox("근무 안내소", LOCATIONS.get(island, []), key="jw_p_man")
         with c3:
-            # [핵심] 조장, 관리자인 경우 대상 해설사 선택 가능
             if role in ["조장", "관리자"]:
                 all_users = get_users(island)
                 target_name = st.selectbox("대상 해설사", all_users, index=all_users.index(name) if name in all_users else 0, key="jw_u_man")
@@ -668,7 +666,7 @@ def ui_journal_write(name, island, role):
         df_act = load_data("활동일지", target_date.year, target_date.month, island)
         my_act = pd.DataFrame()
         if not df_act.empty:
-            df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             my_act = df_act[(df_act['d_str'] == t_str) & (df_act['이름'].astype(str).str.strip() == target_name.strip()) & (df_act['장소'] == place_act)]
         
         default_in = datetime.strptime("09:00", "%H:%M").time()
@@ -704,7 +702,7 @@ def ui_journal_write(name, island, role):
         df_act = load_data("활동일지", now.year, now.month, island)
         my_act = pd.DataFrame()
         if not df_act.empty:
-            df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df_act['d_str'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             my_act = df_act[(df_act['d_str'] == today_str) & (df_act['이름'].astype(str).str.strip() == name.strip()) & (df_act['장소'] == place_act)]
             
         c_in = ""; c_out = ""
@@ -798,6 +796,8 @@ def ui_journal_write(name, island, role):
                     if is_joint: msg += " (공동해설)"
                     st.success(msg)
                     time.sleep(1.5); st.rerun()
+            else:
+                st.warning("데이터를 저장하는 중입니다. 연속해서 누르지 마세요!")
 
 def ui_view_journal(scope, name, island, role=""):
     st.header("🔍 내 활동 조회" if scope=="me" else "🔍 활동 조회")
@@ -839,16 +839,24 @@ def ui_view_journal(scope, name, island, role=""):
             st.info("조건에 맞는 출퇴근 기록이 없습니다.")
         else:
             disp_df = filter_act[edit_cols].copy()
-            disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            # [방어 로직] 날짜 변환 시 발생하는 NaN 방지
+            disp_df['날짜'] = pd.to_datetime(disp_df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             
             disp_df['활동시간(H)'] = disp_df.apply(lambda r: calc_working_hours(str(r.get('출근시간','')).split('(')[0].strip(), str(r.get('퇴근시간','')).split('(')[0].strip()), axis=1)
+            
             disp_df['출근시간'] = disp_df['출근시간'].apply(format_time_with_rounded)
             disp_df['퇴근시간'] = disp_df['퇴근시간'].apply(format_time_with_rounded)
             
             tot_hours = sum([float(x) for x in disp_df['활동시간(H)'] if x])
             tot_hours_str = str(int(tot_hours)) if tot_hours.is_integer() else str(round(tot_hours, 1))
             
-            # [핵심] 삭제 체크박스 컬럼 맨 앞에 추가
+            # [방어 로직] 모든 텍스트 열의 타입을 명확하게 강제 변환
+            disp_df['이름'] = disp_df['이름'].astype(str)
+            disp_df['장소'] = disp_df['장소'].astype(str)
+            disp_df['출근시간'] = disp_df['출근시간'].astype(str)
+            disp_df['퇴근시간'] = disp_df['퇴근시간'].astype(str)
+            disp_df['활동시간(H)'] = disp_df['활동시간(H)'].astype(str)
+            
             disp_df.insert(0, '삭제', False)
             disp_df.loc['합계'] = [False, '합계', '-', '-', '-', '-', tot_hours_str]
             
@@ -861,14 +869,13 @@ def ui_view_journal(scope, name, island, role=""):
                 st.markdown(f"<div style='text-align:right; font-weight:bold; font-size:18px;'>총 활동시간 합계: {tot_hours_str} H</div>", unsafe_allow_html=True)
                 
                 if st.form_submit_button("변경사항 및 삭제 저장"):
-                    df_act_dates = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                    df_act_dates = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d").fillna("")
                     
                     rows_to_delete = edited_act[edited_act['삭제'] == True]
                     rows_to_update = edited_act[(edited_act['삭제'] == False) & (edited_act['날짜'] != '합계')]
                     
                     has_changes = False
                     
-                    # 1. 수정 처리
                     for _, r in rows_to_update.iterrows():
                         if role not in ["조장", "관리자"] and str(r['이름']).strip() != name.strip(): continue 
                         d_str = r['날짜']
@@ -878,19 +885,18 @@ def ui_view_journal(scope, name, island, role=""):
                             df_act.loc[idx, '퇴근시간'] = str(r['퇴근시간']).split('(')[0].strip()
                             has_changes = True
 
-                    # 2. 삭제 처리
                     for _, r in rows_to_delete.iterrows():
                         if r['날짜'] == '합계': continue
                         if role not in ["조장", "관리자"] and str(r['이름']).strip() != name.strip(): continue
                         
                         mask = (df_act_dates == r['날짜']) & (df_act['이름'] == r['이름']) & (df_act['장소'] == r['장소'])
                         df_act = df_act[~mask]
-                        df_act_dates = df_act_dates[~mask] # 인덱스 유지
+                        df_act_dates = df_act_dates[~mask]
                         has_changes = True
                     
                     if has_changes:
                         sh = client.open(SPREADSHEET_NAME).worksheet("활동일지")
-                        df_act['날짜'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                        df_act['날짜'] = pd.to_datetime(df_act['날짜'], errors='coerce').dt.strftime("%Y-%m-%d").fillna("")
                         sh.clear()
                         sh.update([df_act.columns.values.tolist()] + df_act.astype(str).values.tolist())
                         st.cache_data.clear()
@@ -915,12 +921,12 @@ def ui_view_journal(scope, name, island, role=""):
                 if c not in filter_op.columns: filter_op[c] = ""
             
             disp_op = filter_op[show_cols].copy()
-            disp_op['날짜'] = pd.to_datetime(disp_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+            # [방어 로직] 날짜 변환 및 텍스트 데이터 명확화
+            disp_op['날짜'] = pd.to_datetime(disp_op['날짜'], errors='coerce').dt.strftime('%Y-%m-%d').fillna("")
             
             disp_op['탐방객수'] = disp_op['탐방객수'].apply(safe_int)
             disp_op['청취자수'] = disp_op['청취자수'].apply(safe_int)
             
-            # [핵심] 'True', 'False' 글자를 깔끔한 'O'와 빈칸으로 변경
             disp_op['공동해설'] = disp_op['공동해설'].apply(lambda x: 'O' if str(x).strip() == 'True' else '')
             
             def calc_vis(row):
@@ -939,7 +945,13 @@ def ui_view_journal(scope, name, island, role=""):
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
             
-            # [핵심] 삭제 체크박스 컬럼 맨 앞에 추가
+            # [방어 로직] 타입 일치 강제
+            disp_op['장소'] = disp_op['장소'].astype(str)
+            disp_op['이름'] = disp_op['이름'].astype(str)
+            disp_op['입력시간'] = disp_op['입력시간'].astype(str)
+            disp_op['특이사항'] = disp_op['특이사항'].astype(str)
+            disp_op['공동해설'] = disp_op['공동해설'].astype(str)
+            
             disp_op.insert(0, '삭제', False)
             disp_op.loc['합계'] = [False, '합계', '-', '-', '-', tot_vis, tot_lis, tot_cnt, '-', '-']
             
@@ -959,7 +971,7 @@ def ui_view_journal(scope, name, island, role=""):
                 edited_op = st.data_editor(disp_op, hide_index=True, use_container_width=True, column_config=col_config_op)
                 
                 if st.form_submit_button("선택한 운영일지 삭제"):
-                    df_op_dates = pd.to_datetime(df_op['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                    df_op_dates = pd.to_datetime(df_op['날짜'], errors='coerce').dt.strftime("%Y-%m-%d").fillna("")
                     rows_to_delete = edited_op[edited_op['삭제'] == True]
                     
                     has_del = False
@@ -969,12 +981,12 @@ def ui_view_journal(scope, name, island, role=""):
                         
                         mask = (df_op_dates == r['날짜']) & (df_op['이름'] == r['이름']) & (df_op['장소'] == r['장소']) & (df_op['입력시간'] == r['입력시간'])
                         df_op = df_op[~mask]
-                        df_op_dates = df_op_dates[~mask] # 인덱스 유지
+                        df_op_dates = df_op_dates[~mask]
                         has_del = True
                         
                     if has_del:
                         sh = client.open(SPREADSHEET_NAME).worksheet("운영일지")
-                        df_op['날짜'] = pd.to_datetime(df_op['날짜'], errors='coerce').dt.strftime("%Y-%m-%d")
+                        df_op['날짜'] = pd.to_datetime(df_op['날짜'], errors='coerce').dt.strftime("%Y-%m-%d").fillna("")
                         sh.clear()
                         sh.update([df_op.columns.values.tolist()] + df_op.astype(str).values.tolist())
                         st.cache_data.clear()
