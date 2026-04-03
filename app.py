@@ -473,7 +473,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
         pdf.cell(50, 8, "비고(내용 및 특이사항)", 1, 1, 'C', True)
 
         pdf.set_font("Nanum", "", 9)
-        # [수정] 06시부터 21시까지 (총 15칸) 확장
         time_slots = [f"{h:02d}:00~{h+1:02d}:00" for h in range(6, 21)]
         
         slot_data = {t: {'vis': 0, 'lis': 0, 'cnt': 0, 'note': []} for t in time_slots}
@@ -488,7 +487,6 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
                 try: h = int(in_time.split(':')[0])
                 except: h = 8
                 
-                # [수정] 06시 이전과 21시 이후의 시간대 바운더리 변경
                 if h < 6: slot_k = "06:00~07:00"
                 elif h >= 20: slot_k = "20:00~21:00"
                 else: slot_k = f"{h:02d}:00~{h+1:02d}:00"
@@ -520,7 +518,7 @@ def generate_official_journal_month_pdf(df_act, df_op, p_year, p_month, target_p
             
             t_vis += d['vis']; t_lis += d['lis']; t_cnt += d['cnt']
             
-            pdf.cell(30, 7, t, 1, 0, 'C') # 줄 높이를 7로 약간 조정하여 한 페이지에 다 들어가도록 변경
+            pdf.cell(30, 7, t, 1, 0, 'C') 
             pdf.cell(35, 7, v_str, 1, 0, 'C')
             pdf.cell(35, 7, l_str, 1, 0, 'C')
             pdf.cell(30, 7, c_str, 1, 0, 'C')
@@ -748,7 +746,6 @@ def ui_journal_write(name, island, role):
     st.divider()
     st.subheader("해설 실적 등록 (운영일지)")
     
-    # [수정] 06시부터 21시까지 시간대 확장
     time_slots = [f"{h:02d}:00 ~ {h+1:02d}:00" for h in range(6, 21)]
     curr_h = now.hour
     default_idx = 0
@@ -1459,7 +1456,6 @@ def main():
     stx_manager = get_manager()
     cookie_val = None
     
-    # 쿠키 매니저가 로드될 시간을 주기 위해 약간의 대기 로직 추가
     if 'cookie_checked' not in st.session_state:
         time.sleep(0.5)
         st.session_state['cookie_checked'] = True
@@ -1497,7 +1493,7 @@ def main():
                         
                         if auto_login:
                             stx_manager.set("geopark_login", uid, expires_at=datetime.now() + timedelta(days=30))
-                            time.sleep(0.5) # 쿠키 저장 대기
+                            time.sleep(0.5) 
                         
                         st.rerun()
                     else: 
@@ -1510,7 +1506,6 @@ def main():
         role = user['직책']
         island = user['섬']
         
-        # 상단 명시적 로그아웃 영역 추가
         c_top1, c_top2 = st.columns([8, 2])
         with c_top1:
             st.markdown(f"### 👤 {name} ({role})")
@@ -1518,7 +1513,7 @@ def main():
             if st.button("🚪 로그아웃", use_container_width=True, key="logout_btn_top"):
                 stx_manager.delete("geopark_login")
                 st.session_state['logged_in'] = False
-                time.sleep(0.5) # 쿠키 삭제 대기
+                time.sleep(0.5) 
                 st.rerun()
         
         with st.sidebar:
@@ -1530,14 +1525,12 @@ def main():
                 st.rerun()
                 
         if role == "관리자":
-            t1, t2, t3, t4, t5, t6, t7 = st.tabs(["📝 일지 작성", "🔍 활동 조회", "✍️ 계획 작성", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드", "📊 통계"])
-            with t1: ui_journal_write(name, island, role)
-            with t2: ui_view_journal("all", name, island, role)
-            with t3: ui_plan_input(name, island)
-            with t4: ui_view_plan("all", name, island, role)
-            with t5: ui_approve(island, role)
-            with t6: ui_report_download(island, role)
-            with t7: ui_stats()
+            t1, t2, t3, t4, t5 = st.tabs(["🔍 활동 조회", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드", "📊 통계"])
+            with t1: ui_view_journal("all", name, island, role)
+            with t2: ui_view_plan("all", name, island, role)
+            with t3: ui_approve(island, role)
+            with t4: ui_report_download(island, role)
+            with t5: ui_stats()
             
         elif role == "조장":
             t1, t2, t3, t4, t5, t6 = st.tabs(["📝 일지 작성", "🔍 활동 조회", "✍️ 계획 작성", "🗓️ 계획 조회 및 수정", "✅ 계획 승인", "📥 보고서 다운로드"])
