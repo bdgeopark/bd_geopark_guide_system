@@ -138,7 +138,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
             for c in ["출근시간", "퇴근시간"]:
                 if c not in df.columns: df[c] = ""
         elif sheet_name == "운영일지":
-            for c in ["입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항", "공동해설", "타임스탬프", "년", "월"]:
+            for c in ["입력시간", "탐방객수", "청취자수", "특이사항", "공동해설", "해설횟수"]:
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
@@ -943,6 +943,10 @@ def ui_view_journal(scope, name, island, role=""):
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
             
+            # [추가된 정렬 로직]
+            disp_op = disp_op.sort_values(by=['날짜', '입력시간']).reset_index(drop=True)
+            
+            # [안전 장치] 전체 데이터를 DataFrame으로 재조합하기 (Type error 방지)
             disp_op.insert(0, '삭제', False)
             sum_dict_op = {
                 '삭제': False, '날짜': '합계', '장소': '-', '이름': '-', '입력시간': '-',
