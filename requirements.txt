@@ -3,4 +3,4 @@ pandas
 gspread
 oauth2client
 fpdf2
-streamlit-local-storage
+streamlit-cookies-controller
