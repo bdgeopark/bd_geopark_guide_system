@@ -7,7 +7,8 @@ import time
 import calendar
 import os
 from fpdf import FPDF
-import extra_streamlit_components as stx
+# [수정] 로컬 스토리지 라이브러리로 변경
+from streamlit_local_storage import LocalStorage
 
 # =========================================================
 # 1. 초기 설정 및 상수
@@ -33,8 +34,8 @@ LOCATIONS = {
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
 
-def get_manager():
-    return stx.CookieManager()
+# 로컬 스토리지 객체 생성
+localS = LocalStorage()
 
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
@@ -943,10 +944,6 @@ def ui_view_journal(scope, name, island, role=""):
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
             
-            # [추가된 정렬 로직]
-            disp_op = disp_op.sort_values(by=['날짜', '입력시간']).reset_index(drop=True)
-            
-            # [안전 장치] 전체 데이터를 DataFrame으로 재조합하기 (Type error 방지)
             disp_op.insert(0, '삭제', False)
             sum_dict_op = {
                 '삭제': False, '날짜': '합계', '장소': '-', '이름': '-', '입력시간': '-',
@@ -1352,7 +1349,7 @@ def ui_report_download(island, role):
             st.markdown("**1. 운영일지 (서식3)**")
             st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
             if not (day_act.empty and day_op.empty):
-                pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, "월간 전체")
+                pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, pr)
                 if pdf_data_op:
                     st.download_button(
                         label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
@@ -1457,21 +1454,19 @@ def ui_stats():
 # 5. 메인 실행
 # =========================================================
 def main():
-    stx_manager = get_manager()
-    cookie_val = None
+    if 'local_storage_key' not in st.session_state:
+        st.session_state['local_storage_key'] = "geopark_user_id_" + str(int(time.time()))
+        
+    ls = LocalStorage(st.session_state['local_storage_key'])
     
-    if 'cookie_checked' not in st.session_state:
-        time.sleep(0.5)
-        st.session_state['cookie_checked'] = True
-        st.rerun()
-
-    cookie_val = stx_manager.get(cookie="geopark_login")
+    stored_uid = ls.getItem("geopark_user_uid")
+    stored_upw = ls.getItem("geopark_user_upw")
     
-    if cookie_val and not st.session_state['logged_in']:
+    if stored_uid and stored_upw and not st.session_state.get('logged_in', False):
         try:
             sh = client.open(SPREADSHEET_NAME).worksheet("사용자")
             users = sh.get_all_records()
-            found = next((u for u in users if str(u['아이디']) == str(cookie_val)), None)
+            found = next((u for u in users if str(u['아이디']) == str(stored_uid) and str(u['비번']) == str(stored_upw)), None)
             if found:
                 st.session_state['logged_in'] = True
                 st.session_state['user_info'] = found
@@ -1479,12 +1474,12 @@ def main():
         except:
             pass
 
-    if not st.session_state['logged_in']:
+    if not st.session_state.get('logged_in', False):
         st.markdown("## 🔐 로그인")
-        with st.form("login"):
+        with st.form("login_form"):
             uid = st.text_input("아이디")
             upw = st.text_input("비밀번호", type="password")
-            auto_login = st.checkbox("✅ 자동 로그인 유지 (30일)")
+            auto_login = st.checkbox("✅ 자동 로그인 유지")
             
             if st.form_submit_button("로그인"):
                 try:
@@ -1496,8 +1491,9 @@ def main():
                         st.session_state['user_info'] = found
                         
                         if auto_login:
-                            stx_manager.set("geopark_login", uid, expires_at=datetime.now() + timedelta(days=30))
-                            time.sleep(0.5) 
+                            ls.setItem("geopark_user_uid", uid)
+                            ls.setItem("geopark_user_upw", upw)
+                            time.sleep(0.5)
                         
                         st.rerun()
                     else: 
@@ -1515,7 +1511,7 @@ def main():
             st.markdown(f"### 👤 {name} ({role})")
         with c_top2:
             if st.button("🚪 로그아웃", use_container_width=True, key="logout_btn_top"):
-                stx_manager.delete("geopark_login")
+                ls.deleteAll()
                 st.session_state['logged_in'] = False
                 time.sleep(0.5) 
                 st.rerun()
@@ -1523,7 +1519,7 @@ def main():
         with st.sidebar:
             st.info(f"{name} ({role})")
             if st.button("로그아웃", key="logout_btn_side"):
-                stx_manager.delete("geopark_login")
+                ls.deleteAll()
                 st.session_state['logged_in'] = False
                 time.sleep(0.5)
                 st.rerun()
