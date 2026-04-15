@@ -7,7 +7,6 @@ import time
 import calendar
 import os
 from fpdf import FPDF
-# [수정] 로컬 스토리지 라이브러리로 변경
 from streamlit_local_storage import LocalStorage
 
 # =========================================================
@@ -33,9 +32,6 @@ LOCATIONS = {
     "시청": ["인천시청", "지질공원팀 사무실"]
 }
 DAY_MAP = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
-
-# 로컬 스토리지 객체 생성
-localS = LocalStorage()
 
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
@@ -139,7 +135,7 @@ def load_data(sheet_name, year=None, month=None, island=None):
             for c in ["출근시간", "퇴근시간"]:
                 if c not in df.columns: df[c] = ""
         elif sheet_name == "운영일지":
-            for c in ["입력시간", "탐방객수", "청취자수", "특이사항", "공동해설", "해설횟수"]:
+            for c in ["입력시간", "탐방객수", "청취자수", "해설횟수", "특이사항", "공동해설", "타임스탬프", "년", "월"]:
                 if c not in df.columns: df[c] = ""
 
         if not df.empty and '날짜' in df.columns:
@@ -944,6 +940,8 @@ def ui_view_journal(scope, name, island, role=""):
             final_cols = ["날짜", "장소", "이름", "입력시간", "탐방객수", "청취자수", "해설횟수", "공동해설", "특이사항"]
             disp_op = disp_op[final_cols]
             
+            disp_op = disp_op.sort_values(by=['날짜', '입력시간']).reset_index(drop=True)
+            
             disp_op.insert(0, '삭제', False)
             sum_dict_op = {
                 '삭제': False, '날짜': '합계', '장소': '-', '이름': '-', '입력시간': '-',
@@ -1349,7 +1347,7 @@ def ui_report_download(island, role):
             st.markdown("**1. 운영일지 (서식3)**")
             st.caption("※ 한 달 전체 데이터가 1일 1장씩 출력됩니다.")
             if not (day_act.empty and day_op.empty):
-                pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, pr)
+                pdf_data_op = generate_official_journal_month_pdf(day_act, day_op, vy, vm, sel_place, "월간 전체")
                 if pdf_data_op:
                     st.download_button(
                         label=f"📄 {vy}년 {vm}월 {sel_place} 운영일지 다운로드", 
@@ -1454,13 +1452,17 @@ def ui_stats():
 # 5. 메인 실행
 # =========================================================
 def main():
-    if 'local_storage_key' not in st.session_state:
-        st.session_state['local_storage_key'] = "geopark_user_id_" + str(int(time.time()))
-        
-    ls = LocalStorage(st.session_state['local_storage_key'])
+    ls = LocalStorage()
     
-    stored_uid = ls.getItem("geopark_user_uid")
-    stored_upw = ls.getItem("geopark_user_upw")
+    # [수정] 섬 통신 환경을 고려하여 2.5초 대기 및 시각적 스피너 표시
+    if 'storage_loaded' not in st.session_state:
+        with st.spinner("📡 도서 지역 통신 상태를 고려하여 로그인 정보를 확인 중입니다... (최대 3초)"):
+            time.sleep(2.5) 
+        st.session_state['storage_loaded'] = True
+        st.rerun()
+
+    stored_uid = ls.getItem("geopark_uid")
+    stored_upw = ls.getItem("geopark_upw")
     
     if stored_uid and stored_upw and not st.session_state.get('logged_in', False):
         try:
@@ -1491,8 +1493,8 @@ def main():
                         st.session_state['user_info'] = found
                         
                         if auto_login:
-                            ls.setItem("geopark_user_uid", uid)
-                            ls.setItem("geopark_user_upw", upw)
+                            ls.setItem("geopark_uid", uid)
+                            ls.setItem("geopark_upw", upw)
                             time.sleep(0.5)
                         
                         st.rerun()
@@ -1513,7 +1515,7 @@ def main():
             if st.button("🚪 로그아웃", use_container_width=True, key="logout_btn_top"):
                 ls.deleteAll()
                 st.session_state['logged_in'] = False
-                time.sleep(0.5) 
+                time.sleep(1.0) 
                 st.rerun()
         
         with st.sidebar:
@@ -1521,7 +1523,7 @@ def main():
             if st.button("로그아웃", key="logout_btn_side"):
                 ls.deleteAll()
                 st.session_state['logged_in'] = False
-                time.sleep(0.5)
+                time.sleep(1.0)
                 st.rerun()
                 
         if role == "관리자":
